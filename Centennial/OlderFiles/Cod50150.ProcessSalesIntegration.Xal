@@ -1,0 +1,57 @@
+codeunit 50150 "Process Sales Integration"
+{
+    trigger OnRun()
+    begin
+        ProcessIntegration();
+    end;
+
+    procedure ProcessIntegration()
+    var
+        IntHeader: Record "Sales Integration Header";
+        OldFileNo: Code[20];
+        NewFileNo: Code[20];
+    begin
+        IntHeader.SetCurrentKey("File No.", "Order Processed", "Critical Error in Order");
+        IntHeader.SetRange("Order Processed", FALSE);
+        IntHeader.SetRange("Critical Error in Order", FALSE);
+
+        if IntHeader.FindSet(False) then
+            REPEAT
+                //IF NOT IntHeader."Order Processed" THEN BEGIN
+                //NewFileNo := IntHeader."File No.";
+                //IF OldFileNo <> NewFileNo THEN BEGIN
+                //OldFileNo := NewFileNo;
+                //ProcessWEBFile(OldFileNo, IntHeader."File Type");
+                //END;
+                //END;
+                ProcessIntHeader(IntHeader);
+            UNTIL IntHeader.Next = 0;
+    end;
+
+    procedure ProcessIntHeader(IntHeader: Record "Sales Integration Header")
+    var
+        ContainerClient: Codeunit "ABS Container Client";
+        ServiceStorageAuthorization: Codeunit "Storage Service Authorization";
+        Authorization: Interface "Storage Service Authorization";
+        SharedKey: SecretText;
+    begin
+        //https://www.youtube.com/watch?v=iPvSN71JaMo
+        //https://www.youtube.com/watch?v=cp91N4xFqlg
+        //SharedKey := 't03AmoKTExPqIhUGXR9kt+A7vAd+i83fPUo8eWcJ5DX6Bosj+sUObaJV/05to72njiCJeVimvb9t+AStaUVWNg==';
+        Authorization := ServiceStorageAuthorization.CreateSharedKey('t03AmoKTExPqIhUGXR9kt+A7vAd+i83fPUo8eWcJ5DX6Bosj+sUObaJV/05to72njiCJeVimvb9t+AStaUVWNg==');
+
+        ContainerClient.Initialize('olegteststoageacc', Authorization);
+    end;
+
+    var
+        BillToNotExistErr: Label 'Bill-to not exist';
+        SellToNotExistErr: Label 'Sell-to not exist';
+        OrderOnHoldErr: Label 'Order on Hold';
+        NoItemswithQtyErr: Label 'No Items with Qty on order';
+        ItemDoesNotExist: Label 'Item does not Exist';
+        ItemIsBlockedErr: Label 'Item is Blocked';
+        ItemHasWrongStatusErr: Label 'Item has wrong Status -%1';
+        QtyLbl: Label 'Quantity:%1';
+        SellToBlockedErr: Label 'Sell-to blocked with %1';
+        BillToBlockedErr: Label 'Bill-to blocked with %1';
+}

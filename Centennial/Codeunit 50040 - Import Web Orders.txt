@@ -1,0 +1,765 @@
+codeunit 50040 "Import Web Orders"
+{
+    // BDO008, 08/10/11, New codeunit to import from *.csv file to create sales orders
+    //   - Moves file to Processed or Errors folder
+    //   - If errors in order, populates new fields in sales header
+    // 
+    // CEN2.050, Oleg Zenine, 2 April 2012
+    //   - Chnaged the way that file is copied to processed/errors folders
+    // 
+    // CEN3.001, Oleg Zenine, 14 November 2012
+    //   - Added File loaded Date Time
+    // 
+    // CEN3.003, Oleg Zenine, 30 January 2013
+    //   - ADDED Commit to prevent deletion of orders before the file is moved
+    // 
+    // CEN3.011.2, Sutikno Darmohusodo, 31 january 2014
+    //   - Added field "Order Source Code"
+    // 
+    // CEN3.011.4, Sutikno Darmohusodo, 20 February 2014
+    //   - Added max length "Tray No." - LineFields[12] to 30
+    // 
+    // CEN3.053, Sutikno Darmohusodo, 25 April 2017
+    //   - Changed ORD line Num. of fields from 28 to 30 as in bulk orders
+    // 
+    // CEN4.001, Sutikno Darmohusodo, 27 December 2018
+    //   - Upgrade to Nav 2018
+
+
+    trigger OnRun()
+    begin
+        CheckFoldersExist;
+        Code;
+    end;
+
+    var
+        FileRec: Record File;
+        TempIncOrderHeader: Record "Incoming Order Header" temporary;
+        TempIncOrderLine: Record "Incoming Order Line" temporary;
+        SalesSetup: Record "Sales & Receivables Setup";
+        Bytes: Integer;
+        SalesLineNo: Integer;
+        NoOrders: Integer;
+        NoOrdersInFile: Integer;
+        NoLines: Integer;
+        TotalQuantity: Decimal;
+        FileCount: Integer;
+        FileNo: Code[20];
+        PathTxt: Text[180];
+        FileName: Text[180];
+        NewName: Text[180];
+        Txt: Text[1024];
+        ErrorFolder: Text[250];
+        ProcessedFolder: Text[250];
+        HeaderFields: array [50] of Text[50];
+        LineFields: array [50] of Text[50];
+        FileFooterFields: array [50] of Text[50];
+        FileHeaderFields: array [50] of Text[50];
+        RecordType: Text[30];
+        OrderOk: Boolean;
+        FileOk: Boolean;
+        FileHasNonFatalError: Boolean;
+        Window: Dialog;
+        FileIn: File;
+        FileSystem: Automation ;
+        [WithEvents]
+        Timer: Automation ;
+        WebDefaultOrderSource: Code[10];
+        Text001: Label '%1 file(s) processed.  %2 Sales Order(s) created.';
+        Text002: Label 'Processing file           #1################\';
+        Text003: Label 'Creating Sales Order #2################';
+        Text004: Label '%1: %2';
+        Text005: Label 'No. of orders in file doesn''t agree to footer information.';
+        Text006: Label 'Invalid no. of orders in file footer.';
+        Text007: Label 'No. of lines in file doesn''t agree to footer information.';
+        Text008: Label 'Invalid no. of lines in file footer.';
+        Text009: Label 'Total quantity of items doesn''t agree to footer information.';
+        Text010: Label 'Invalid total quantity in file footer.';
+        Text011: Label 'Invalid File:  Order line does not match header no.';
+        Text012: Label 'Invalid File:  Order line does not have header.';
+        Text013: Label 'Invalid File Header record.';
+        Text014: Label 'Error on order header record.';
+        Text015: Label 'Error on order line record.';
+        Text016: Label 'Folder ''%1'' not found.';
+        Text017: Label '%1 ''%2'', %3 ''%4'' already exists.';
+        Text018: Label '%1 ''%2'', %3 ''%4'' in file more than once.';
+        FileMgt: Codeunit "File Management";
+        ServerFileName: Text[250];
+        TempNameValueBuffer: Record "Name/Value Buffer" temporary;
+        FileNameOnly: Text[180];
+
+    procedure "Code"()
+    var
+        lrecIncOrderHeader: Record "Incoming Order Header";
+    begin
+        //CheckFoldersExist;  //CEN4.001 commented - already exec onRun
+        
+        IF GUIALLOWED THEN
+          Window.OPEN(Text002 + Text003);
+        
+        NoOrders := 0;
+        
+        /*
+        IF lrecIncOrderHeader.FINDLAST THEN BEGIN
+          IF (INCSTR(lrecIncOrderHeader."File No.") <> '') AND (STRLEN(INCSTR(lrecIncOrderHeader."File No.")) <= MAXSTRLEN(FileNo)) THEN
+            FileNo := INCSTR(lrecIncOrderHeader."File No.")
+          ELSE
+            FileNo := FORMAT(TODAY, 0, '<Year4><Month,2><Day,2>') + '-' + FORMAT(TIME, 0, '<Hours24><Minutes,2><Seconds,2><Second dec.>');
+        END ELSE
+          FileNo := 'WB0000000001';
+        */
+        
+        FileRec.RESET;
+        FileRec.SETRANGE(Path, PathTxt);
+        FileRec.SETRANGE("Is a file", TRUE);
+        FileRec.SETFILTER(Name, '*.csv');
+        IF FileRec.FINDFIRST THEN
+          REPEAT
+            NoOrdersInFile := 0;
+            NoLines := 0;
+            TotalQuantity := 0;
+            TempIncOrderHeader.DELETEALL;
+            TempIncOrderLine.DELETEALL;
+        
+            FileOk := TRUE;
+            FileHasNonFatalError := FALSE;
+        
+            IF GUIALLOWED THEN
+              Window.UPDATE(1,FileRec.Name);
+            FileName := FileRec.Path + '\' + FileRec.Name;
+        
+            FileIn.OPEN(FileName);
+            FileIn.TEXTMODE(TRUE);
+        
+            REPEAT
+              FileIn.READ(Txt);
+              GetRecordType;
+            UNTIL (FileIn.POS = FileIn.LEN) OR NOT FileOk;
+        
+          FileIn.CLOSE;
+          // Rename file
+          IF FileOk AND NOT FileHasNonFatalError THEN BEGIN
+            InsertOrders;
+            NewName := ProcessedFolder + FileRec.Name;
+          END ELSE BEGIN
+            NoOrders := 0;
+            NewName := ErrorFolder + FileRec.Name;
+          END;
+          //RENAME(FileName,NewName);  //CEN2.049 Replaced with Copy/ERASE
+          FILE.COPY(FileName, NewName);
+          FILE.ERASE(FileName);
+        
+          COMMIT; //CEN3.003
+        
+          FileCount += 1;
+        UNTIL FileRec.NEXT = 0;
+        
+        /*
+        //CEN4.001 use this block if files are not on the server
+        TempNameValueBuffer.DELETEALL;
+        FileMgt.GetClientDirectoryFilesList(TempNameValueBuffer, PathTxt);
+        TempNameValueBuffer.SETFILTER(Name, '*.csv');
+        
+        IF TempNameValueBuffer.FIND('-') THEN
+          REPEAT
+            NoOrdersInFile := 0;
+            NoLines := 0;
+            TotalQuantity := 0;
+            TempIncOrderHeader.DELETEALL;
+            TempIncOrderLine.DELETEALL;
+        
+            FileOk := TRUE;
+            FileHasNonFatalError := FALSE;
+        
+            FileNameOnly := DELSTR(TempNameValueBuffer.Name,1,STRLEN(PathTxt));
+            FileName := TempNameValueBuffer.Name;
+            ServerFileName := FileMgt.UploadFileSilent(FileName);
+        
+            IF GUIALLOWED THEN
+              Window.UPDATE(1,FileNameOnly);
+        
+            FileIn.OPEN(ServerFileName);
+            FileIn.TEXTMODE(TRUE);
+        
+            REPEAT
+              FileIn.READ(Txt);
+              GetRecordType;
+            UNTIL (FileIn.POS = FileIn.LEN) OR NOT FileOk;
+        
+          FileIn.CLOSE;
+          // Rename file
+          IF FileOk AND NOT FileHasNonFatalError THEN BEGIN
+            InsertOrders;
+            NewName := ProcessedFolder + FileNameOnly;
+          END ELSE BEGIN
+            NoOrders := 0;
+            NewName := ErrorFolder + FileNameOnly;
+          END;
+          FileMgt.CopyClientFile(FileName, NewName,TRUE);
+          FileMgt.DeleteClientFile(FileName);
+        
+          COMMIT;
+        
+          FileCount += 1;
+        UNTIL TempNameValueBuffer.NEXT = 0;
+        */
+        
+        IF GUIALLOWED THEN
+          Window.CLOSE;
+        
+        IF GUIALLOWED THEN
+          MESSAGE(Text001,FileCount,NoOrders)
+
+    end;
+
+    procedure GetRecordType()
+    var
+        Temp: Text[500];
+    begin
+        // first 3 characters of each imported line
+
+        RecordType := COPYSTR(Txt,1,STRPOS(Txt,',') - 1);
+
+        CASE RecordType OF
+          'HDR':
+            BEGIN
+              IF ParseLine(Txt, FileHeaderFields, 3) THEN
+                FileNo := FileHeaderFields[3]
+              ELSE
+                ErrorBatch(Text013);
+            END;
+          'ORD':
+            BEGIN
+              IF FileOk THEN BEGIN
+                //IF ParseLine(Txt, HeaderFields, 28) THEN  //CEN3.053
+                IF ParseLine(Txt, HeaderFields, 30) THEN    //CEN3.053
+                CreateIncOrderHeader
+              ELSE
+                ErrorBatch(Text014);
+              END
+            END;
+          'ITM':
+            BEGIN
+              IF FileOk THEN BEGIN
+                IF ParseLine(Txt, LineFields, 13) THEN
+                  CreateIncOrderLine
+                ELSE
+                  ErrorBatch(Text015);
+                END;
+            END;
+          'FTR':
+            BEGIN
+              ParseLine(Txt, FileFooterFields, 6);
+              CheckTotals;
+            END;
+          ELSE
+        END;
+    end;
+
+    procedure CreateIncOrderHeader()
+    var
+        lrecIncOrderHeader: Record "Incoming Order Header";
+        ldecTemp: Decimal;
+        ldatTemp: Date;
+        lblnTemp: Boolean;
+        ltxtErrorMessage: Text[50];
+    begin
+        // create new order
+        SalesLineNo := 0;
+
+        IF GUIALLOWED THEN
+          Window.UPDATE(2, HeaderFields[2]);
+
+        IF lrecIncOrderHeader.GET(lrecIncOrderHeader."File Type"::"Centennial Website", FileNo, HeaderFields[2]) THEN BEGIN
+          ErrorBatch(STRSUBSTNO(Text017, lrecIncOrderHeader.FIELDCAPTION("File No."),
+                                         lrecIncOrderHeader."File No.",
+                                         lrecIncOrderHeader.FIELDCAPTION("Order No."),
+                                         lrecIncOrderHeader."Order No."));
+
+          EXIT;
+        END;
+
+        WITH TempIncOrderHeader DO BEGIN
+          IF GET("File Type"::"Centennial Website", FileNo, HeaderFields[2]) THEN BEGIN
+            ErrorBatch(STRSUBSTNO(Text018, FIELDCAPTION("File No."),
+                                           "File No.",
+                                           FIELDCAPTION("Order No."),
+                                           "Order No."));
+            EXIT;
+          END;
+
+          INIT;
+          "File Type" := "File Type"::"Centennial Website";
+          "File No." := FileNo;
+          "File Name" := FileRec.Name;
+          "Order No." := HeaderFields[2];
+          "Sell-To Customer No." := HeaderFields[3];
+          "Ship-To Code" := HeaderFields[4];
+          "Shipping Agent Service Code" := HeaderFields[5];
+          "Shipment Method Code" := HeaderFields[6];
+          "Shipping Agent Code" := HeaderFields[7];
+          "Location Code" := HeaderFields[8];
+          "Order Discount Code" := HeaderFields[9];
+
+          "File Loaded Date" := TODAY;  //CEN3.001
+          "File Loaded Time" := TIME;   //CEN3.001
+
+          IF HeaderFields[10] <> '' THEN BEGIN
+            IF EVALUATE(ldecTemp, HeaderFields[10]) THEN BEGIN
+              "Discount Percentage" := ldecTemp;
+            END ELSE BEGIN
+              "Critical Error in Order" := TRUE;
+              FileHasNonFatalError := TRUE;
+              ltxtErrorMessage := STRSUBSTNO(Text004, FIELDCAPTION("Discount Percentage"), HeaderFields[10]);
+              "Error Description" := COPYSTR("Error Description" + ltxtErrorMessage, 1, MAXSTRLEN("Error Description"));
+            END;
+          END;
+
+          IF ParseDate(HeaderFields[11], ldatTemp) THEN BEGIN
+            "Order Date" := ldatTemp
+          END ELSE BEGIN
+            "Critical Error in Order" := TRUE;
+            FileHasNonFatalError := TRUE;
+            ltxtErrorMessage := STRSUBSTNO(Text004, FIELDCAPTION("Order Date"), HeaderFields[11]);
+            "Error Description" := COPYSTR("Error Description" + ltxtErrorMessage, 1, MAXSTRLEN("Error Description"));
+          END;
+
+          IF HeaderFields[12] <> '' THEN
+            IF ParseDate(HeaderFields[12], ldatTemp) THEN BEGIN
+              "Requested Shipment Date" := ldatTemp
+            END ELSE BEGIN
+              "Critical Error in Order" := TRUE;
+              FileHasNonFatalError := TRUE;
+              ltxtErrorMessage := STRSUBSTNO(Text004, FIELDCAPTION("Requested Shipment Date"), HeaderFields[12]);
+              "Error Description" := COPYSTR("Error Description" + ltxtErrorMessage, 1, MAXSTRLEN("Error Description"));
+            END;
+
+          IF HeaderFields[13] <> '' THEN
+            IF ParseDate(HeaderFields[13], ldatTemp) THEN BEGIN
+              "Cancellation Date" := ldatTemp
+            END ELSE BEGIN
+              "Critical Error in Order" := TRUE;
+              FileHasNonFatalError := TRUE;
+              ltxtErrorMessage := STRSUBSTNO(Text004, FIELDCAPTION("Cancellation Date"), HeaderFields[13]);
+              "Error Description" := COPYSTR("Error Description" + ltxtErrorMessage, 1, MAXSTRLEN("Error Description"));
+            END;
+
+          "Customer PO" := HeaderFields[14];
+          "Customer Order No." := HeaderFields[15];
+          "Campaign Code" := HeaderFields[16];
+          "Order Type" := HeaderFields[17];
+          "Ship-to Name" := HeaderFields[18];
+          "Ship-to Name 2" := HeaderFields[19];
+          "Ship-to Address" := HeaderFields[20];
+          "Ship-to Address 2" := HeaderFields[21];
+          "Ship-to City" := HeaderFields[22];
+          "Ship-to Contact" := HeaderFields[23];
+          "Ship-to Post Code" := HeaderFields[24];
+          "Ship-to County" := HeaderFields[25];
+          "Ship-to Country/Region Code" := HeaderFields[26];
+
+          //CEN3.011.2
+          IF WebDefaultOrderSource <> '' THEN
+            "Order Source Code" := WebDefaultOrderSource;
+
+          IF HeaderFields[27] <> '' THEN BEGIN
+            IF EVALUATE(lblnTemp, HeaderFields[27]) THEN BEGIN
+              "Approval Required" := lblnTemp;
+            END ELSE BEGIN
+              "Critical Error in Order" := TRUE;
+              FileHasNonFatalError := TRUE;
+              ltxtErrorMessage := STRSUBSTNO(Text004, FIELDCAPTION("Approval Required"), HeaderFields[27]);
+              "Error Description" := COPYSTR("Error Description" + ltxtErrorMessage, 1, MAXSTRLEN("Error Description"));
+            END;
+          END;
+
+          IF HeaderFields[28] <> '' THEN BEGIN
+            IF EVALUATE(lblnTemp, HeaderFields[28]) THEN BEGIN
+              "Ship and Invoice Order" := lblnTemp;
+            END ELSE BEGIN
+              "Critical Error in Order" := TRUE;
+              FileHasNonFatalError := TRUE;
+              ltxtErrorMessage := STRSUBSTNO(Text004, FIELDCAPTION("Ship and Invoice Order"), HeaderFields[28]);
+              "Error Description" := COPYSTR("Error Description" + ltxtErrorMessage, 1, MAXSTRLEN("Error Description"));
+            END;
+          END;
+
+          INSERT;
+
+          NoOrders := NoOrders + 1;
+          NoOrdersInFile := NoOrdersInFile + 1;
+        END;
+    end;
+
+    procedure CreateIncOrderLine()
+    var
+        lblnTemp: Boolean;
+        ldecTemp: Decimal;
+        ltxtErrorMessage: Text[50];
+    begin
+        WITH TempIncOrderLine DO BEGIN
+          IF HeaderFields[2] = '' THEN BEGIN
+            ErrorBatch(Text012);
+            EXIT;
+          END ELSE IF LineFields[2] <> HeaderFields[2] THEN BEGIN
+            ErrorBatch(Text011);
+            EXIT;
+          END;
+
+          INIT;
+          "File Type" := TempIncOrderHeader."File Type";
+          "File No." := TempIncOrderHeader."File No.";
+          "Order No." := LineFields[2];
+          SalesLineNo := SalesLineNo + 10000;
+          "Line No" := SalesLineNo;
+          "UTMC Item" := LineFields[3];
+
+          //CEN2.049 Added Comment Type
+          CASE LOWERCASE(LineFields[4]) OF
+           'g/l account':
+              "Line Type" := "Line Type"::"G/L Account";
+            'comment' :
+              "Line Type" := "Line Type"::Comment;
+            ELSE
+              "Line Type" := "Line Type"::Item;
+          END;
+
+          "Item No." := LineFields[5];
+          "Item Description" := LineFields[6];
+          "Item Description 2" := LineFields[7];
+
+          IF LineFields[8] <> '' THEN BEGIN
+            IF EVALUATE(ldecTemp, LineFields[8]) THEN BEGIN
+              Quantity := ldecTemp;
+            END ELSE BEGIN
+              "Item Error" := TRUE;
+              FileHasNonFatalError := TRUE;
+              ltxtErrorMessage := STRSUBSTNO(Text004, FIELDCAPTION(Quantity), Quantity);
+              "Item Error Description" := COPYSTR("Item Error Description" + ltxtErrorMessage, 1, MAXSTRLEN("Item Error Description"));
+            END;
+          END ELSE
+            Quantity := 0;
+          TotalQuantity := TotalQuantity + Quantity;
+
+          IF LineFields[9] <> '' THEN BEGIN
+            IF EVALUATE(ldecTemp, LineFields[9]) THEN BEGIN
+              "Unit Price" := ldecTemp;
+            END ELSE BEGIN
+              "Item Error" := TRUE;
+              FileHasNonFatalError := TRUE;
+              ltxtErrorMessage := STRSUBSTNO(Text004, FIELDCAPTION("Unit Price"), "Unit Price");
+              "Item Error Description" := COPYSTR("Item Error Description" + ltxtErrorMessage, 1, MAXSTRLEN("Item Error Description"));
+            END;
+          END ELSE
+            "Unit Price" := 0;
+
+          IF LOWERCASE(LineFields[10]) = 'amount' THEN
+            "Line Discount Type" := "Line Discount Type"::Amount
+          ELSE
+            "Line Discount Type" := "Line Discount Type"::Percentage;
+
+          IF LineFields[11] <> '' THEN BEGIN
+            IF EVALUATE(ldecTemp, LineFields[11]) THEN BEGIN
+              "Line Discount Amount" := ldecTemp;
+            END ELSE BEGIN
+              "Item Error" := TRUE;
+              FileHasNonFatalError := TRUE;
+              ltxtErrorMessage := STRSUBSTNO(Text004, FIELDCAPTION("Line Discount Amount"), "Line Discount Amount");
+              "Item Error Description" := COPYSTR("Item Error Description" + ltxtErrorMessage, 1, MAXSTRLEN("Item Error Description"));
+            END;
+          END ELSE
+            "Line Discount Amount" := 0;
+
+          "Tray No." := COPYSTR(LineFields[12],1,30); //CEN3.011.4
+
+          IF LineFields[13] <> '' THEN BEGIN
+            IF EVALUATE(lblnTemp, LineFields[13]) THEN BEGIN
+              "Not Ship Case" := lblnTemp;
+            END ELSE BEGIN
+              "Item Error" := TRUE;
+              FileHasNonFatalError := TRUE;
+              ltxtErrorMessage := STRSUBSTNO(Text004, FIELDCAPTION("Not Ship Case"), "Not Ship Case");
+              "Item Error Description" := COPYSTR("Item Error Description" + ltxtErrorMessage, 1, MAXSTRLEN("Item Error Description"));
+            END;
+          END;
+
+          INSERT;
+          NoLines := NoLines + 1;
+        END;
+    end;
+
+    procedure ParseLine(LineIn: Text[1024];var "Fields": array [50] of Text[50];ExpectedNoOfFields: Integer): Boolean
+    var
+        ltxtChar: Text[1];
+        i: Integer;
+        lintFldNo: Integer;
+        lblnDone: Boolean;
+        lblnDoubleQuoteClosed: Boolean;
+        lblnTooManyFields: Boolean;
+    begin
+        lblnDoubleQuoteClosed := TRUE;
+
+        i := 1;
+        lintFldNo := 1;
+
+        lblnDone := (i > STRLEN(LineIn));
+        CLEAR(Fields);
+
+        WHILE ((NOT lblnDone) AND (NOT lblnTooManyFields)) DO BEGIN
+          ltxtChar := COPYSTR(LineIn, i, 1);
+
+          IF (ltxtChar = '"') THEN BEGIN
+            IF NOT lblnDoubleQuoteClosed THEN BEGIN
+              lblnDoubleQuoteClosed := TRUE;
+            END ELSE
+              lblnDoubleQuoteClosed := FALSE;
+          END ELSE IF (ltxtChar = ',') THEN BEGIN
+            IF lblnDoubleQuoteClosed THEN BEGIN
+              lintFldNo := lintFldNo + 1;
+              IF lintFldNo > ExpectedNoOfFields THEN
+                lblnTooManyFields := TRUE;
+            END ELSE BEGIN
+              Fields[lintFldNo] := Fields[lintFldNo] + ltxtChar;
+            END;
+          END ELSE
+            Fields[lintFldNo] := Fields[lintFldNo] + ltxtChar;
+
+          i := i + 1;
+          lblnDone := (i > STRLEN(LineIn));
+        END;
+
+        IF lblnTooManyFields OR (lintFldNo < ExpectedNoOfFields) THEN
+          EXIT(FALSE);
+
+        EXIT(TRUE);
+    end;
+
+    procedure ParseDate(DateText: Text[1024];var DateField: Date): Boolean
+    var
+        lintDay: Integer;
+        lintMonth: Integer;
+        lintYear: Integer;
+    begin
+        IF STRLEN(DateText) <> 8 THEN
+          EXIT(FALSE);
+
+        IF EVALUATE(lintDay,COPYSTR(DateText,7,2)) THEN BEGIN
+          IF EVALUATE(lintMonth,COPYSTR(DateText,5,2)) THEN BEGIN
+            IF EVALUATE(lintYear,COPYSTR(DateText,1,4)) THEN
+              DateField := DMY2DATE(lintDay, lintMonth, lintYear)
+            ELSE
+              EXIT(FALSE);
+          END ELSE
+            EXIT(FALSE);
+        END ELSE
+          EXIT(FALSE);
+
+        EXIT(TRUE);
+    end;
+
+    procedure CheckTotals(): Boolean
+    var
+        ldecTemp: Decimal;
+        lintTemp: Integer;
+    begin
+        IF FileFooterFields[4] <> '' THEN BEGIN
+          IF NOT EVALUATE(lintTemp, FileFooterFields[4]) THEN BEGIN
+            ErrorBatch(Text006);
+            EXIT(FALSE);
+          END;
+        END ELSE
+          lintTemp := 0;
+
+        IF lintTemp <> NoOrdersInFile THEN BEGIN
+          ErrorBatch(Text005);
+          EXIT(FALSE);
+        END;
+
+        IF FileFooterFields[5] <> '' THEN BEGIN
+          IF NOT EVALUATE(lintTemp, FileFooterFields[5]) THEN BEGIN
+            ErrorBatch(Text008);
+            EXIT(FALSE);
+          END;
+        END ELSE
+          lintTemp := 0;
+
+        IF lintTemp <> NoLines THEN BEGIN
+          ErrorBatch(Text007);
+          EXIT(FALSE);
+        END;
+
+        IF FileFooterFields[6] <> '' THEN BEGIN
+          IF NOT EVALUATE(ldecTemp, FileFooterFields[6]) THEN BEGIN
+            ErrorBatch(Text010);
+            EXIT(FALSE);
+          END;
+        END ELSE
+          ldecTemp := 0;
+
+        IF ldecTemp <> TotalQuantity THEN BEGIN
+          ErrorBatch(Text009);
+          EXIT(FALSE);
+        END;
+
+        EXIT(TRUE);
+    end;
+
+    procedure InsertOrders()
+    var
+        lrecIncOrderHeader: Record "Incoming Order Header";
+        lrecIncOrderLine: Record "Incoming Order Line";
+    begin
+        IF TempIncOrderHeader.FINDSET THEN
+          REPEAT
+            lrecIncOrderHeader := TempIncOrderHeader;
+            lrecIncOrderHeader.INSERT;
+          UNTIL TempIncOrderHeader.NEXT = 0;
+
+        IF TempIncOrderLine.FINDSET THEN
+          REPEAT
+            lrecIncOrderLine := TempIncOrderLine;
+            lrecIncOrderLine.INSERT;
+          UNTIL TempIncOrderLine.NEXT = 0;
+    end;
+
+    procedure ErrorBatch(ErrorMessage: Text[100])
+    var
+        lrecIncOrderHeader: Record "Incoming Order Header";
+        ldatetimeStart: DateTime;
+        lintRetries: Integer;
+    begin
+        FileOk := FALSE;
+
+        lintRetries := 0;
+
+        WITH lrecIncOrderHeader DO BEGIN
+          INIT;
+          "File Type" := "File Type"::"Centennial Website";
+
+          IF FileNo = '' THEN
+            FileNo := FORMAT(TODAY, 0, '<Year4><Month,2><Day,2>') + '-' + FORMAT(TIME, 0, '<Hours24><Minutes,2><Seconds,2><Second dec.>');
+
+          "File No." := FileNo;
+          "File Name" := FileRec.Name;
+          "Critical Error in Order" := TRUE;
+          "Error Description" := ErrorMessage;
+          WHILE NOT INSERT DO BEGIN
+            lintRetries := lintRetries + 1;
+            IF lintRetries > 3 THEN
+              ERROR('Critical error creating error batch record.');
+
+            // 5 second delay
+            ldatetimeStart := CURRENTDATETIME;
+            WHILE CURRENTDATETIME < ldatetimeStart + 5000 DO BEGIN
+            END;
+            FileNo := FORMAT(TODAY, 0, '<Year4><Month,2><Day,2>') + '-' + FORMAT(TIME, 0, '<Hours24><Minutes,2><Seconds,2><Second dec.>');
+            "File No." := FileNo;
+          END;
+        END;
+    end;
+
+    procedure CheckFoldersExist()
+    begin
+        //CEN4.001 replaced automation with codeunit 419 file mgt
+        SalesSetup.GET;
+        SalesSetup.TESTFIELD("Website Import Path");
+        SalesSetup.TESTFIELD("Website Import Path (Proc.)");
+        SalesSetup.TESTFIELD("Website Import Path (Error)");
+
+        WebDefaultOrderSource := SalesSetup."Web Default Order Source";
+
+        PathTxt := SalesSetup."Website Import Path";
+        IF COPYSTR(PathTxt, STRLEN(PathTxt), 1) <> '\' THEN
+          PathTxt := PathTxt + '\';
+
+        IF NOT FileMgt.ServerDirectoryExists(PathTxt) THEN BEGIN
+          PathTxt := ReplaceStr(PathTxt, '\', '%1');
+          ERROR(STRSUBSTNO(Text016, PathTxt), '\');
+        END;
+
+        ProcessedFolder := SalesSetup."Website Import Path (Proc.)";
+        IF COPYSTR(ProcessedFolder, STRLEN(ProcessedFolder), 1) <> '\' THEN
+          ProcessedFolder := ProcessedFolder + '\';
+
+        IF NOT FileMgt.ServerDirectoryExists(ProcessedFolder) THEN BEGIN
+          ProcessedFolder := ReplaceStr(ProcessedFolder, '\', '%1');
+          ERROR(STRSUBSTNO(Text016, ProcessedFolder), '\');
+        END;
+
+        ErrorFolder := SalesSetup."Website Import Path (Error)";
+        IF COPYSTR(ErrorFolder, STRLEN(ErrorFolder), 1) <> '\' THEN
+          ErrorFolder := ErrorFolder + '\';
+
+        IF NOT FileMgt.ServerDirectoryExists(ErrorFolder) THEN BEGIN
+          ErrorFolder := ReplaceStr(ErrorFolder, '\', '%1');
+          ERROR(STRSUBSTNO(Text016, ErrorFolder), '\');
+        END;
+    end;
+
+    procedure ReplaceStr(ltInput: Text[1024];ltWhat: Text[1024];ltWith: Text[1024]) ltOutput: Text[1024]
+    var
+        liInputLen: Integer;
+        liWhatLen: Integer;
+        liFindFirst: Integer;
+    begin
+        // TextReplace function finds all ocurences of 'ltWhat' in string 'ltInput' and replaces them with 'ltWith'.
+        // Function returns 'ltOutput'.
+        liInputLen := STRLEN(ltInput);
+        liWhatLen := STRLEN(ltWhat);
+
+        // check, if ltInput and ltWhat are not empty strings
+        IF (liInputLen > 0) AND (liWhatLen > 0) THEN BEGIN
+           liFindFirst := STRPOS(ltInput, ltWhat);
+           WHILE (liFindFirst > 0) DO BEGIN
+              ltOutput := ltOutput + COPYSTR(ltInput, 1, liFindFirst - 1);
+              ltOutput := ltOutput + ltWith;
+              ltInput := DELSTR(ltInput,1,liFindFirst + liWhatLen - 1);
+              liFindFirst := STRPOS(ltInput, ltWhat);
+           END;
+           ltOutput := ltOutput + ltInput;
+        END ELSE BEGIN
+           ltOutput := ltInput;
+        END;
+    end;
+
+    procedure CheckFoldersExistOld()
+    begin
+        SalesSetup.GET;
+        SalesSetup.TESTFIELD("Website Import Path");
+        SalesSetup.TESTFIELD("Website Import Path (Proc.)");
+        SalesSetup.TESTFIELD("Website Import Path (Error)");
+
+        WebDefaultOrderSource := SalesSetup."Web Default Order Source";
+
+        PathTxt := SalesSetup."Website Import Path";
+        IF COPYSTR(PathTxt, STRLEN(PathTxt), 1) <> '\' THEN
+          PathTxt := PathTxt + '\';
+
+        IF ISCLEAR(FileSystem) THEN
+          CREATE(FileSystem,FALSE,TRUE);
+
+        IF NOT FileSystem.FolderExists(PathTxt) THEN BEGIN
+          PathTxt := ReplaceStr(PathTxt, '\', '%1');
+          ERROR(STRSUBSTNO(Text016, PathTxt), '\');
+        END;
+
+        ProcessedFolder := SalesSetup."Website Import Path (Proc.)";
+        IF COPYSTR(ProcessedFolder, STRLEN(ProcessedFolder), 1) <> '\' THEN
+          ProcessedFolder := ProcessedFolder + '\';
+
+        IF NOT FileSystem.FolderExists(ProcessedFolder) THEN BEGIN
+          ProcessedFolder := ReplaceStr(ProcessedFolder, '\', '%1');
+          ERROR(STRSUBSTNO(Text016, ProcessedFolder), '\');
+        END;
+
+        ErrorFolder := SalesSetup."Website Import Path (Error)";
+        IF COPYSTR(ErrorFolder, STRLEN(ErrorFolder), 1) <> '\' THEN
+          ErrorFolder := ErrorFolder + '\';
+
+        IF NOT FileSystem.FolderExists(ErrorFolder) THEN BEGIN
+          ErrorFolder := ReplaceStr(ErrorFolder, '\', '%1');
+          ERROR(STRSUBSTNO(Text016, ErrorFolder), '\');
+        END;
+    end;
+}
+

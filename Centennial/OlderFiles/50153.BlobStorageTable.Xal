@@ -1,0 +1,139 @@
+table 50153 "Blob Storage 2"
+{
+    DataClassification = ToBeClassified;
+
+    fields
+    {
+        field(1; "No."; Integer)
+        {
+            DataClassification = ToBeClassified;
+            Caption = 'No.';
+        }
+        field(2; "Blob File"; Blob)
+        {
+            DataClassification = ToBeClassified;
+            Caption = 'Blob File';
+        }
+        field(3; "File Name"; Text[50])
+        {
+            DataClassification = ToBeClassified;
+            Caption = 'File Name';
+        }
+    }
+
+    keys
+    {
+        key(Key1; "No.")
+        {
+            Clustered = true;
+        }
+    }
+
+    procedure ExportToAzure(FolderName: Text; var Error: Text): Boolean
+    var
+        TempBlob: Codeunit "Temp Blob";
+        InStrm: InStream;
+        ABSContainerClient: Codeunit "ABS Container Client";
+        StorageAccount: Text;
+        Authorization: Interface "Storage Service Authorization";
+        ContainerName: Text;
+        Response: Codeunit "ABS Operation Response";
+        StorageServiceAuth: Codeunit "Storage Service Authorization";
+        SharedKey: Text;
+        ABSBlob: Codeunit "ABS Blob Client";
+    begin
+        Rec.CalcFields("Blob File");
+        if not Rec."Blob File".HasValue then
+            exit;
+        Rec."Blob File".CreateInStream(InStrm);
+        ContainerName := 'filemdttest1';
+        StorageAccount := 'bctest111';
+        SharedKey := 'JdyzEY2J87B+jBYjQS6BW8ZB+OxzQBsOdOMbNCSlKAuerWcn06go8QxlJ1emg61TP+WNSR/1Y+TT+ASt2suAhA==';
+        Authorization := StorageServiceAuth.CreateSharedKey(SharedKey);
+        ABSBlob.Initialize(StorageAccount, ContainerName, Authorization);
+        Response := ABSBlob.PutBlobBlockBlobStream(FolderName + Rec."File Name", InStrm);
+
+        if not Response.IsSuccessful() then
+            Error := Response.GetError();
+
+        exit(Response.IsSuccessful());
+        // if Response.IsSuccessful() then
+        //     Message('File Uploaded.')
+        // else
+        //     Message('Error: %1', Response.GetError());
+        // if Response.IsSuccessful()
+        //     and Confirm('Do you want to delete exported file from the table?') then
+        //     BlobStorage.Delete();
+    end;
+
+    procedure ImportFromAzure()
+    var
+        ABSContContent: Record "ABS Container Content";
+        ABSBlob: Codeunit "ABS Blob Client";
+        ABSContainerClient: Codeunit "ABS Container Client";
+        Response: Codeunit "ABS Operation Response";
+        StorageServiceAuth: Codeunit "Storage Service Authorization";
+        IsSuccess: Boolean;
+        InStrm: InStream;
+        Authorization: Interface "Storage Service Authorization";
+        OutStrm: OutStream;
+        ContainerName: Text;
+        SharedKey: Text;
+        StorageAccount: Text;
+        LastNo: Integer;
+        mesall: Text;
+        mes: List of [Text];
+        CRLF: Char;
+    begin
+        ContainerName := 'filemdttest1';
+        StorageAccount := 'bctest111';
+        SharedKey := 'JdyzEY2J87B+jBYjQS6BW8ZB+OxzQBsOdOMbNCSlKAuerWcn06go8QxlJ1emg61TP+WNSR/1Y+TT+ASt2suAhA==';
+        Authorization := StorageServiceAuth.CreateSharedKey(SharedKey);
+        ABSBlob.Initialize(StorageAccount, ContainerName, Authorization);
+        Response := ABSBlob.ListBlobs(ABSContContent);
+        if not Response.IsSuccessful() then
+            Message('error: %1', Response.GetError());
+        ABSContContent.Reset();
+        ABSContContent.SetFilter("Content Type", '<>%1', 'Directory');
+        ABSContContent.SetFilter("Parent Directory", '<>%1 & <>%2 & <>%3', 'DEFAULT/', 'ERROR/', 'PROCESSED/');
+        if ABSContContent.FindSet() then begin
+            IsSuccess := true;
+            LastNo := 0;
+            repeat
+                Clear(InStrm);
+                Response := ABSBlob.GetBlobAsStream(ABSContContent.Name, InStrm);
+                if Response.IsSuccessful() then begin
+                    Rec.Init();
+                    if LastNo <> 0 then begin
+                        Rec."No." := LastNo + 1;
+                        LastNo += 1;
+                    end else begin
+                        Rec."No." := 1;
+                        LastNo := 1;
+                    end;
+                    Rec."File Name" := ABSContContent.Name;
+                    Rec."Blob File".CreateOutStream(OutStrm);
+                    CopyStream(OutStrm, InStrm);
+                    Rec.Insert();
+                end else begin
+                    IsSuccess := false;
+                    Message('Error: %1', Response.GetError());
+                end;
+            until ABSContContent.Next() = 0;
+        end else
+            Message('No files found.');
+
+        if IsSuccess then
+            if ABSContContent.FindSet() then
+                repeat
+                    if not ((ABSContContent."Content Type" = 'Directory') or
+                            (ABSContContent."Parent Directory" = 'DEFAULT/') or
+                            (ABSContContent."Parent Directory" = 'ERROR/') or
+                            (ABSContContent."Parent Directory" = 'PROCESSED/')) then begin
+                        Response := ABSBlob.DeleteBlob(ABSContContent.Name);
+                        // if not Response.IsSuccessful() then
+                        //     Message('Error: %1', Response.GetError());
+                    end;
+                until ABSContContent.Next() = 0;
+    end;
+}

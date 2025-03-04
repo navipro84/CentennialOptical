@@ -1,0 +1,1382 @@
+codeunit 50097 "Process Incoming Web Orders"
+{
+    // CEN1.050, Oleg Zenine, 19 April 2012
+    //   - New Object
+    // CEN2.051, Oleg Zenine, 22 May 2012
+    //   - Commented out logic for searching for correct location. All web orders will be directed to the
+    //     home branch of the customer regardless of product. This is done due to conflict of
+    //     Delivery By location logic with Kitting Logic. Change is approved with Shraga and Steve.
+    // 
+    // CEN2.060, Oleg Zenine, 6 June 2012
+    //   - Fixed issue with Printing of Pick Tickets
+    // 
+    // CEN3.001, Oleg Zenine, 7 September 2012
+    //   - Fixed issue with Printing Pick tickets
+    //   - Fixed issue with Web Discount
+    // 
+    // CEN3.002, Oleg Zenine, 16 Januuary 2013
+    //   - Bug fix with Bill-to Customer
+    // 
+    // CEN3.005, Oleg Zenine, 6 May 2013
+    //   - Bugfix with PT not printing
+    //   - Added population of Sent To Printer
+    // 
+    // CEN3.006, Oleg Zenine, 10 June 2013
+    //   - Added code to handle Payment Terms
+    // 
+    // CEN3.008, Sutikno Darmohusodo, 18 September 2013
+    //   - Fixed approval required error description
+    // 
+    // CEN3.011.2, Sutikno Darmohusodo, 31 january 2014
+    //   - Added population of field "Order Source Code" on Sales Header
+    //   - Moved Eyerep Order Comments (Special Instruction) from Sales Line to Sales Comment Line
+    //   - Moved Website line comments (Comment Type = Comment) from Sales Line to Sales Comment Line
+    // 
+    // CEN3.031, Sutikno Darmohusodo, 7 January 2015
+    //   - Fixed text message for kitted item - reserve field (Text025 to Text030)
+    // 
+    // CEN3.046, Sutikno Darmohusodo, 25 February 2016
+    //   - Added option RMA to "File Type" and excluded from being processed together with UTMC
+    // 
+    // CEN3.053, Sutikno Darmohusodo, 28 March 2017
+    //     Modified to process Bulk Orders:
+    //   - Process bulk discount only if "Line Discount Type" is "Percentage"
+    //   - Stored Bulk Discount to "Additional Discount %"
+    //   - Removed values on "Inv. Discount Amount","Web Discount Code","Web Discount %","Web Discount Amount",
+    //     "Web Discount Amount to Inv.", recalc "Buying Group Discount" after add. Disc %
+    //     if the line gets the bulk discount
+    // 
+    //   - Eyerep Cases: - 06/09/17 Cancelled
+    //     Modified function FinalizeOrder to check if lines have item with "Universal Brand" for campaign = Eyerep
+    //     Populate SalesHeader."External Document No." with 'FA' + "Salesperson Code"
+    // 
+    // CEN3.053.1, Sutikno Darmohusodo, 20 June 2017
+    //   - Moved population of field "Order Type Code" on Sales Header before Sell-to Customer No. validation
+    //     to get the web discount field condition on Table 36 - Bill-to Customer No. validation
+    // 
+    // CEN3.059, Sutikno Darmohusodo, 21 July 2017
+    //   - Disabled printing pick-ticket if InHeader."Disable PT Print" is TRUE -
+    //     On function FinalizeOrder
+    // 
+    // CEN3.065, Sutikno Darmohusodo, 17 May 2018
+    //   - Added "Approved User ID" to "Sales Comment Line" in CreateOrderHeader function
+    // 
+    // CEN4.001, Sutikno Darmohusodo, 27 December 2018
+    //   - Upgrade to Nav 2018
+    //   - Removed C25000 Kit Management, T25000 Kit Sales Line, Prod. BOM Header/Line tables and replaced with BOM Component table
+    //   - Modified function GetAvailQty + CheckItem
+    // 
+    // CEN4.003, Sutikno Darmohusodo, 28 October 2020
+    //   - Included "WINK" File Type to be processed
+    // 
+    // CEN4.006, Sutikno Darmohusodo, 21 December 2020
+    //   - Modified function CreateOrderHeader: Moved Campaign No. validation to get Sales Header Bill-to for GetPromoLine
+    //   - Changed the creation of new SalesLine "Line No."/LineCounter var to accommodate GetPromoLine
+    //   - 3 Feb 2021 - Added functions CheckAdditItem to show error for regular item before processing
+    //     and CheckPromoItem
+    //   - 26 March 2021 - Added "Salesperson Code" on CreateOrderHeader to copy to Sales Header
+    //   - 6 April 2021 - Added check for campaign starting/ending date
+    // 
+    // CEN4.032, Sutikno Darmohusodo, 10 May 2023
+    //   - added locktimeout(false) function after each commit
+
+
+    trigger OnRun()
+    begin
+        LOCKTIMEOUT(FALSE);
+        ProcessWEBFiles;
+    end;
+
+    var
+        SalesInvHeader: Record "Sales Invoice Header";
+        Text000: Label 'Bill-to not exist';
+        Text001: Label 'Sell-to not exist';
+        Text002: Label 'Order on Hold';
+        Text003: Label 'No Items with Qty on order';
+        Text004: Label 'Item does not Exist';
+        Text005: Label 'Item is Blocked';
+        Text006: Label 'Item has wrong Status -%1';
+        Text007: Label 'Quantity:%1';
+        Text008: Label 'I:%1,Q:%2';
+        Text009: Label 'Cannot delete lines from order';
+        Text010: Label 'Sell-to blocked with %1';
+        Text011: Label 'Bill-to blocked with %1';
+        Text012: Label 'Campaign Code does not exist';
+        Text013: Label 'Order Type does not exist';
+        Text014: Label 'Location Code does not Exist';
+        Text015: Label 'Discount Percentage Cannot be more then 100%';
+        Text016: Label 'Approval is required for this order';
+        Text017: Label 'Shipment Method does not exist';
+        Text018: Label 'Shipping Agent does not exist';
+        Text019: Label 'Shipping Agent Service does not exist for this Agent';
+        Text020: Label 'Ship-to Does not exist for this Sell-to';
+        Text021: Label 'Postal Code does not exist';
+        Text022: Label 'Account does not exist';
+        Text023: Label 'Account is not set as Direct Posting Account';
+        Text024: Label 'There is no Lines for this order';
+        Text025: Label 'Kit %1 does not exist';
+        Text026: Label 'Kit Item %1 is Blocked';
+        Text027: Label 'Kit Item %1 has wrong status';
+        Text028: Label 'Kit Item %1 does not exist';
+        Text029: Label 'Lines Have Errors';
+        Text030: Label 'Reserve must be Never for Kitted Item';
+        Text032: Label 'Clip %1 does not exist';
+        Text033: Label 'Clip Item %1 is Blocked';
+        Text034: Label 'Clip Item %1 has wrong status';
+        Text035: Label 'Case %1 does not exist';
+        Text036: Label 'Case Item %1 is Blocked';
+        Text037: Label 'Case Item %1 has wrong status';
+        Text038: Label 'Ship-to Country does not exist ';
+        Text039: Label 'Payment Terms does not exist';
+        DefaultOrderType: Label '1';
+        DefaultLocation: Label 'NOR';
+        DefICC: Label 'FRAME';
+        DefProductGroup: Label 'F1';
+        BOMComponent: Record "BOM Component";
+        Text040: Label 'Additional Item is Blocked';
+        Text041: Label 'Additional Item does not Exist';
+        Text042: Label 'Additional Item has wrong Status -%1';
+        Text043: Label 'Promo Line has issue';
+        Text044: Label 'Campaign is outside date range';
+
+    procedure ProcessWEBFiles()
+    var
+        InHeader: Record "Incoming Order Header";
+        OldFileNo: Code[20];
+        NewFileNo: Code[20];
+    begin
+        InHeader.SETCURRENTKEY("File Type","File No.","Order Processed","Critical Error in Order");
+        //InHeader.SETFILTER("File Type", '<>0'); //CEN3.046 - UTMC excluded on original code
+        InHeader.SETFILTER("File Type", '1..5|7'); //CEN3.046 - UTMC and RMA excluded + CEN4.003 added WINK
+        InHeader.SETRANGE("Order Processed", FALSE);
+        InHeader.SETRANGE("Critical Error in Order", FALSE);
+
+        IF InHeader.FINDFIRST THEN
+          REPEAT
+            IF NOT InHeader."Order Processed" THEN BEGIN
+              NewFileNo := InHeader."File No.";
+              IF OldFileNo <> NewFileNo THEN BEGIN
+                OldFileNo := NewFileNo;
+                ProcessWEBFile(OldFileNo, InHeader."File Type");
+              END;
+            END;
+          UNTIL InHeader.NEXT = 0;
+    end;
+
+    procedure ProcessWEBFile(FileNo: Code[20];FileType: Option UTMC,WEBEDI,EDI,KING,"Centennial Website",Eyerep,RMA,WINK)
+    var
+        InHeader: Record "Incoming Order Header";
+        InLine: Record "Incoming Order Line";
+        SalesHeader: Record "Sales Header";
+        SalesLine: Record "Sales Line";
+        InventorySetup: Record "Inventory Setup";
+        Item: Record Item;
+        Customer: Record Customer;
+        Customer2: Record Customer;
+        CustomerOld: Code[20];
+        CustomerNew: Code[20];
+        LineCounter: Integer;
+        DefaultUOM: Code[20];
+        CanReleaseOrder: Boolean;
+        OrderRelease: Codeunit "Release Sales Document";
+        NotProcessLines: Boolean;
+        AvailableQuantity: Decimal;
+        ShipOrder: Boolean;
+        Campaign: Record Campaign;
+        OrderType: Record "Order Type";
+        Location: Record Location;
+        ShipMethod: Record "Shipment Method";
+        ShipAgent: Record "Shipping Agent";
+        ShipAgentService: Record "Shipping Agent Services";
+        ShipTo: Record "Ship-to Address";
+        DefaultProductGroup: Code[20];
+        DefaultItemCategory: Code[20];
+        LineErrorText: Text[100];
+        ErrorInLines: Boolean;
+        CountryRegion: Record "Country/Region";
+        PaymentTerms: Record "Payment Terms";
+        SalesCommentLine: Record "Sales Comment Line";
+        NextLineNo: Integer;
+        LastLineNo: Integer;
+        SalesLineLast: Record "Sales Line";
+    begin
+        InventorySetup.GET;
+        DefaultUOM := InventorySetup."Default Unit of Measure Code";
+        InHeader.SETCURRENTKEY("File Type", "File No.", "Sell-To Customer No.","Order No.");
+        InHeader.SETRANGE("File Type", FileType);
+        InHeader.SETRANGE("File No.", FileNo);
+        IF InHeader.FINDFIRST THEN BEGIN
+          REPEAT
+            IF (NOT InHeader."Order Processed") AND (NOT InHeader."Critical Error in Order")  THEN BEGIN
+        
+              IF NOT Customer.GET(InHeader."Sell-To Customer No.") THEN BEGIN
+                InHeader."Critical Error in Order" := TRUE;
+                InHeader."Error Description" := Text001;
+                InHeader.MODIFY;
+              END ELSE
+                IF Customer.Blocked <> 0 THEN BEGIN
+                  InHeader."Critical Error in Order" := TRUE;
+                  InHeader."Error Description" := STRSUBSTNO(Text010, FORMAT(Customer.Blocked));
+                  InHeader.MODIFY;
+                END;
+        
+              //Bill-to should be coming from Sell-to
+              IF Customer."Bill-to Customer No."<>'' THEN BEGIN
+                IF NOT Customer2.GET(Customer."Bill-to Customer No.") THEN BEGIN   //CEN3.002
+                  InHeader."Critical Error in Order" := TRUE;
+                  InHeader."Error Description" := Text000;
+                  InHeader.MODIFY;
+                END ELSE
+                  IF Customer2.Blocked <> 0 THEN BEGIN
+                    InHeader."Critical Error in Order" := TRUE;
+                    InHeader."Error Description" := STRSUBSTNO(Text011, FORMAT(Customer2.Blocked));
+                    InHeader.MODIFY;
+                  END;
+              END;
+        
+              IF InHeader."Campaign Code"<>'' THEN BEGIN
+                IF NOT Campaign.GET(InHeader."Campaign Code") THEN BEGIN
+                  InHeader."Critical Error in Order" := TRUE;
+                  InHeader."Error Description" := Text012;
+                  InHeader.MODIFY;
+                END ELSE BEGIN  //CEN4.006:
+                  IF ((Campaign."Starting Date" > WORKDATE) AND (Campaign."Starting Date" <> 0D)) OR
+                    ((Campaign."Ending Date" < WORKDATE) AND (Campaign."Ending Date" <> 0D)) THEN BEGIN
+                    InHeader."Critical Error in Order" := TRUE;
+                    InHeader."Error Description" := Text044;
+                    InHeader.MODIFY;
+                  END;
+                END;
+              END;
+        
+              IF InHeader."Order Type"<>'' THEN
+                IF NOT OrderType.GET(InHeader."Order Type") THEN BEGIN
+                  InHeader."Critical Error in Order" := TRUE;
+                  InHeader."Error Description" := Text013;
+                  InHeader.MODIFY;
+                END;
+        
+              IF InHeader."Location Code"<>'' THEN
+                IF NOT Location.GET(InHeader."Location Code") THEN BEGIN
+                  InHeader."Critical Error in Order" := TRUE;
+                  InHeader."Error Description" := Text014;
+                  InHeader.MODIFY;
+                END;
+        
+              IF InHeader."Shipment Method Code"<>'' THEN
+                IF NOT ShipMethod.GET(InHeader."Shipment Method Code") THEN BEGIN
+                  InHeader."Critical Error in Order" := TRUE;
+                  InHeader."Error Description" := Text017;
+                  InHeader.MODIFY;
+                END;
+        
+              IF InHeader."Shipping Agent Code"<>'' THEN
+                IF NOT ShipAgent.GET(InHeader."Shipping Agent Code") THEN BEGIN
+                  InHeader."Critical Error in Order" := TRUE;
+                  InHeader."Error Description" := Text018;
+                  InHeader.MODIFY;
+                END;
+        
+              IF InHeader."Payment Terms Code"<>'' THEN   //CEN3.006
+                IF NOT PaymentTerms.GET(InHeader."Payment Terms Code") THEN BEGIN
+                  InHeader."Critical Error in Order" := TRUE;
+                  InHeader."Error Description" := Text039;
+                  InHeader.MODIFY;
+                END;
+        
+              IF InHeader."Ship-to Country/Region Code"<>'' THEN
+                IF NOT CountryRegion.GET(InHeader."Ship-to Country/Region Code") THEN BEGIN
+                  InHeader."Critical Error in Order" := TRUE;
+                  InHeader."Error Description" := Text038;
+                  InHeader.MODIFY;
+                END;
+        
+              IF (InHeader."Shipping Agent Service Code"<>'') AND (InHeader."Shipping Agent Code"<>'') THEN
+                IF NOT ShipAgentService.GET(InHeader."Shipping Agent Code", InHeader."Shipping Agent Service Code") THEN BEGIN
+                  InHeader."Critical Error in Order" := TRUE;
+                  InHeader."Error Description" := Text019;
+                  InHeader.MODIFY;
+                END;
+        
+              IF InHeader."Ship-To Code"<>'' THEN
+                IF NOT ShipTo.GET(InHeader."Sell-To Customer No.", InHeader."Ship-To Code") THEN BEGIN
+                  InHeader."Critical Error in Order" := TRUE;
+                  InHeader."Error Description" := Text020;
+                  InHeader.MODIFY;
+                END;
+        
+              IF InHeader."Discount Percentage" > 100 THEN BEGIN
+                InHeader."Critical Error in Order" := TRUE;
+                InHeader."Error Description" := Text015;
+                InHeader.MODIFY;
+              END;
+        
+              IF InHeader."Approval Required" AND (NOT InHeader."Order Approved") THEN BEGIN
+                InHeader."Critical Error in Order" := TRUE;
+                InHeader."Error Description" := Text016;
+                InHeader.MODIFY;
+              END;
+        
+              //CEN4.006:
+              IF CheckPromoItem(InHeader."Sell-To Customer No.",InHeader."Campaign Code") <> '' THEN BEGIN
+                InHeader."Critical Error in Order" := TRUE;
+                InHeader."Error Description" := Text043;
+                InHeader.MODIFY;
+              END;
+        
+              CLEAR(InLine);
+              ErrorInLines := FALSE;
+              InLine.SETRANGE("File Type", InHeader."File Type");
+              InLine.SETRANGE("File No.", InHeader."File No.");
+              InLine.SETRANGE("Order No.", InHeader."Order No.");
+              IF NOT InLine.FINDFIRST THEN BEGIN
+                InHeader."Critical Error in Order" := TRUE;
+                InHeader."Error Description" := Text024;
+                InHeader.MODIFY;
+              END ELSE BEGIN
+                REPEAT
+                  LineErrorText := '';
+                  IF InLine."Line Type" = InLine."Line Type"::Item THEN BEGIN
+                    LineErrorText := CheckItem(InLine."Item No.");
+                    //CEN4.006:
+                    IF LineErrorText = '' THEN
+                      LineErrorText := CheckAdditItem(InLine."Item No.",InHeader."Sell-To Customer No.",InHeader."Campaign Code");
+                  END;
+        
+                  IF InLine."Line Type" = InLine."Line Type"::"G/L Account" THEN BEGIN
+                    LineErrorText := CheckGLAccount(InLine."Item No.");
+                  END;
+        
+                  IF LineErrorText<>'' THEN BEGIN
+                    ErrorInLines := TRUE;
+                    InLine."Item Error" := TRUE;
+                    InLine."Item Error Description" := LineErrorText;
+                    InLine.MODIFY;
+                  END;
+                UNTIL InLine.NEXT=0;
+        
+                IF ErrorInLines THEN BEGIN
+                  InHeader."Critical Error in Order" := TRUE;
+                  InHeader."Error Description" := Text029;
+                  InHeader.MODIFY;
+                END;
+              END;
+        
+            END;
+        
+            IF (NOT InHeader."Order Processed") AND (NOT InHeader."Critical Error in Order")  THEN BEGIN
+              CustomerNew := InHeader."Sell-To Customer No.";
+              CanReleaseOrder := FALSE;
+              ShipOrder := FALSE;
+              NotProcessLines := FALSE;
+              CustomerOld := CustomerNew;
+              CLEAR(SalesHeader);
+              //LineCounter := 0;
+              LastLineNo := 0;  //CEN4.006
+        
+              //Reset ICC and PG for the GL Account Lines
+              DefaultItemCategory := DefICC;
+              DefaultProductGroup := DefProductGroup;
+        
+              IF InHeader."Sales Order No." = '' THEN BEGIN
+                CreateOrderHeader(InHeader,SalesHeader);
+              END ELSE BEGIN
+                IF NOT SalesHeader.GET(SalesHeader."Document Type"::Order, InHeader."Sales Order No.") THEN
+                  CreateOrderHeader(InHeader,SalesHeader)
+                ELSE BEGIN
+                  IF SalesHeader.Status = SalesHeader.Status::Released THEN
+                    OrderRelease.Reopen(SalesHeader);
+                  CLEAR(SalesLine);
+                  SalesLine.SETRANGE("Document Type", SalesHeader."Document Type");
+                  SalesLine.SETRANGE("Document No.", SalesHeader."No.");
+                  IF SalesLine.FINDFIRST THEN
+                    REPEAT
+                      IF SalesLine.Freight THEN
+                        SalesLine.Freight := FALSE;
+                      IF NOT SalesLine.DELETE(TRUE) THEN
+                        NotProcessLines := TRUE;
+                    UNTIL SalesLine.NEXT=0;
+                END;
+              END;
+        
+              //CEN4.006:
+              SalesLineLast.RESET;
+              SalesLineLast.SETRANGE("Document Type", SalesHeader."Document Type");
+              SalesLineLast.SETRANGE("Document No.", SalesHeader."No.");
+              IF SalesLineLast.FINDLAST THEN
+                LastLineNo := SalesLineLast."Line No.";
+        
+              //Process Lines
+              CLEAR(SalesCommentLine);  //CEN3.011.2
+              CLEAR(InLine);
+              InLine.SETRANGE("File Type", InHeader."File Type");
+              InLine.SETRANGE("File No.", InHeader."File No.");
+              InLine.SETRANGE("Order No.", InHeader."Order No.");
+              IF InLine.FINDFIRST AND (NOT NotProcessLines) THEN BEGIN
+                //Enter Line Header
+                CLEAR(SalesLine);
+                //LineCounter += 1; //CEN4.006 commented
+                LastLineNo += 10000; //CEN4.006
+                SalesLine."Document Type" := SalesLine."Document Type"::Order;
+                SalesLine."Document No." := SalesHeader."No.";
+                //SalesLine."Line No." := LineCounter*10000;
+                SalesLine."Line No." := LastLineNo; //CEN4.006
+                SalesLine.INSERT(TRUE);
+                COMMIT;
+                LOCKTIMEOUT(FALSE); //CEN4.032
+                SalesLine.Type := SalesLine.Type::" ";
+                SalesLine."Tray No." := COPYSTR('Order# ' + InHeader."Customer Order No." + ' '+ InHeader."Customer PO", 1,30);
+                SalesLine.MODIFY(TRUE);
+        
+                REPEAT
+                  IF InLine."Item No." <>'' THEN BEGIN
+        
+                    IF InLine."Item No." <> 'COMMENT' THEN BEGIN    //CEN3.011.2 - if not comments from Eyerep - SpecialInstruction
+        
+                      CLEAR(SalesLine);
+                      //Check for problems with line
+                      //LineCounter += 1;
+                      LastLineNo += 10000; //CEN4.006
+                      SalesLine."Document Type" := SalesLine."Document Type"::Order;
+                      SalesLine."Document No." := SalesHeader."No.";
+                      //SalesLine."Line No." := LineCounter*10000;
+                      SalesLine."Line No." := LastLineNo; //CEN4.006
+                      SalesLine.INSERT(TRUE);
+                      COMMIT;
+                      LOCKTIMEOUT(FALSE); //CEN4.032
+        
+                      // Commented - CEN3.011.2
+                      /*
+                      IF InLine."Line Type" = InLine."Line Type"::Comment THEN BEGIN
+                        SalesLine.Type:=SalesLine.Type::" ";
+        
+                        IF SalesLine."Item Category Code" = '' THEN
+                          SalesLine.VALIDATE("Item Category Code", DefaultItemCategory);
+                        IF SalesLine."Product Group Code" = '' THEN
+                          SalesLine.VALIDATE("Product Group Code", DefaultProductGroup);
+        
+                        //SalesLine.FindLocation;  CEN2.051 Commented Out
+                        IF InLine."Item Description"<>'' THEN
+                          SalesLine.VALIDATE(Description, InLine."Item Description");
+                        IF InLine."Item Description 2"<>'' THEN
+                          SalesLine.VALIDATE("Description 2", InLine."Item Description 2");
+                        IF InLine."Tray No." <> ''  THEN
+                          SalesLine."Tray No." := InLine."Tray No.";
+        
+                      END;
+                      */
+        
+                      //CEN3.011.2 - Start - replaced the previous blocked - for Web orders
+                      //Web orders - line type = comment has item no = 00000
+                      IF InLine."Line Type" = InLine."Line Type"::Comment THEN BEGIN
+        
+                        SalesCommentLine.SETRANGE("Document Type",SalesCommentLine."Document Type"::Order);
+                        SalesCommentLine.SETRANGE("No.",SalesLine."Document No.");
+                        SalesCommentLine.SETRANGE("Document Line No.",0);
+                        IF SalesCommentLine.FIND('+') THEN
+                          NextLineNo := SalesCommentLine."Line No." + 10000
+                        ELSE
+                          NextLineNo := 10000;
+        
+                        SalesCommentLine."Document Type" := SalesCommentLine."Document Type"::Order;
+                        SalesCommentLine."No." := SalesLine."Document No.";
+                        SalesCommentLine."Document Line No." := 0;
+                        SalesCommentLine."Line No." := NextLineNo;
+        
+                        SalesCommentLine.Comment := DELCHR(InLine."Item Description",'<>',' ') + ' ' +
+                          DELCHR(InLine."Item Description 2",'<>',' ');
+        
+                        SalesCommentLine.INSERT(TRUE);
+        
+                      END;
+                      //CEN3.011.2 - End
+        
+                      IF InLine."Line Type" = InLine."Line Type"::Item THEN BEGIN
+                        IF CheckItem(InLine."Item No.")<>'' THEN BEGIN
+                          //This code is not executed becuase any error in line will stop order from processing
+                          //Code is left just in case it is needed again
+                          SalesLine.Type := SalesLine.Type::" ";
+                          SalesLine.Description := COPYSTR(STRSUBSTNO(Text008, InLine."Item No.",InLine.Quantity), 1,30);
+                          SalesLine."Description 2" := CheckItem(InLine."Item No.");
+                          IF InLine."Tray No." <> ''  THEN
+                            SalesLine."Tray No." := InLine."Tray No.";
+                          SalesLine.MODIFY(TRUE);
+                          COMMIT;
+                          LOCKTIMEOUT(FALSE); //CEN4.032
+                          InLine."Item Error" := TRUE;
+                          InLine."Item Error Description" := CheckItem(InLine."Item No.");
+                        END ELSE BEGIN
+                          CanReleaseOrder := TRUE;
+        
+                          Item.GET(InLine."Item No.");
+                          SalesLine.Type:=SalesLine.Type::Item;
+        
+                          //SalesLine.FindLocation; CEN2.051 Commented Out
+                          SalesLine.VALIDATE(SalesLine."No.", InLine."Item No.");
+        
+                          AvailableQuantity:=GetAvailQty(SalesLine."No.", SalesLine."Location Code",SalesHeader."Shipment Date");
+        
+                          SalesLine.VALIDATE(SalesLine.Quantity, InLine.Quantity);
+                          IF Item."Sold with Clip" AND (Item."Clip No."<>'') THEN BEGIN
+                            SalesLine."Create Clip" := TRUE;
+                            SalesLine."Create Clip No." := Item."Clip No.";
+                            SalesLine.CreateClip;
+                          END;
+        
+                          IF Item."Sold with Case" AND (Item."Case No."<>'') AND (NOT InLine."Not Ship Case") THEN BEGIN
+                            SalesLine."Create Case" := TRUE;
+                            SalesLine."Create Case No." := Item."Case No.";
+                            SalesLine.CreateCase;
+                          END;
+        
+                          SalesLine.MODIFY(TRUE);
+        
+                          /*//CEN4.001
+                          IF SalesLine."Build Kit" THEN BEGIN
+                            CLEAR(KitManagement);
+                            TempKitSalesLine.DELETEALL;
+                            KitManagement.RefreshTempKitSales(SalesLine,TempKitSalesLine);
+                            IF TempKitSalesLine.FINDSET THEN
+                              KitManagement.InsertKitSales(TempKitSalesLine,SalesLine."Line No.");
+                          END;
+                          */
+        
+                          IF AvailableQuantity < SalesLine.Quantity THEN
+                            IF AvailableQuantity>0 THEN BEGIN
+                              SalesLine.VALIDATE("Qty. to Ship", AvailableQuantity);
+                              SalesLine.VALIDATE("Qty. to Invoice", AvailableQuantity);
+                            END ELSE BEGIN
+                              SalesLine.VALIDATE("Qty. to Ship", 0);
+                              SalesLine.VALIDATE("Qty. to Invoice", 0);
+                            END;
+        
+                          IF InLine."Unit Price"<>0 THEN
+                            SalesLine.VALIDATE("Unit Price", InLine."Unit Price");
+        
+                          //Save previous ICC and PG for the GL Account Lines
+                          DefaultItemCategory := SalesLine."Item Category Code";
+                          DefaultProductGroup := SalesLine."Product Group Code";
+                        END;
+                      END;
+                      IF InLine."Line Type" = InLine."Line Type"::"G/L Account" THEN BEGIN
+                        IF CheckGLAccount(InLine."Item No.")<>'' THEN BEGIN
+                          //This code is not executed becuase any error in line will stop order from processing
+                          //Code is left just in case it is needed again
+                          SalesLine.Type := SalesLine.Type::" ";
+                          SalesLine.Description := COPYSTR(STRSUBSTNO(Text008, InLine."Item No.",InLine.Quantity), 1, 30);
+                          SalesLine."Description 2" := CheckGLAccount(InLine."Item No.");
+                          IF InLine."Tray No." <> ''  THEN
+                            SalesLine."Tray No." := InLine."Tray No.";
+                          SalesLine.MODIFY(TRUE);
+                          COMMIT;
+                          LOCKTIMEOUT(FALSE); //CEN4.032
+                          InLine."Item Error" := TRUE;
+                          InLine."Item Error Description" := CheckItem(InLine."Item No.");
+                        END ELSE BEGIN
+                          CanReleaseOrder := TRUE;
+                          SalesLine.Type:=SalesLine.Type::"G/L Account";
+                          SalesLine.VALIDATE(SalesLine."No.", InLine."Item No.");
+                          IF SalesLine."Item Category Code" = '' THEN
+                            SalesLine.VALIDATE("Item Category Code", DefaultItemCategory);
+                          IF SalesLine."Product Group Code" = '' THEN
+                            SalesLine.VALIDATE("Product Group Code", DefaultProductGroup);
+        
+                          //SalesLine.FindLocation; CEN2.051 Commented Out
+                          SalesLine.VALIDATE(SalesLine.Quantity, InLine.Quantity);
+                          SalesLine.VALIDATE("Unit Price", InLine."Unit Price");
+                          IF InLine."Item Description"<>'' THEN
+                            SalesLine.VALIDATE(Description, InLine."Item Description");
+                          IF InLine."Item Description 2"<>'' THEN
+                            SalesLine.VALIDATE("Description 2", InLine."Item Description 2");
+                          IF InLine."Tray No." <> ''  THEN
+                            SalesLine."Tray No." := InLine."Tray No.";
+                        END;
+                      END;
+        
+                      IF InLine."Tray No." <> ''  THEN
+                        SalesLine."Tray No." := InLine."Tray No.";
+        
+                      IF (InLine."Line Type"<>InLine."Line Type"::Comment) THEN BEGIN
+                        IF SalesLine."Tax Group Code" = '' THEN
+                          SalesLine."Tax Group Code" := 'NIL';
+                        IF SalesLine."Unit of Measure Code"='' THEN BEGIN
+                          SalesLine.VALIDATE(SalesLine."Unit of Measure Code", DefaultUOM);
+                        END;
+        
+                        //CEN3.053 - Start
+                        //--------------------------------------------------
+                        //Header Discount has more priority over the line discount
+                        /*
+                        IF (InHeader."Discount Percentage" = 0) AND (InLine."Line Discount Amount"<>0) THEN BEGIN
+                          IF InLine."Line Discount Type"=InLine."Line Discount Type"::Percentage THEN BEGIN
+                            IF InLine."Line Discount Amount" < 100 THEN BEGIN
+                              SalesLine.VALIDATE(Amount, SalesLine.Amount*(1-InLine."Line Discount Amount"/100));
+                            END;
+                          END ELSE BEGIN
+                            IF (InLine."Line Discount Amount">SalesLine.Amount) THEN
+                              SalesLine.VALIDATE(Amount, 0)
+                            ELSE
+                              SalesLine.VALIDATE(Amount, SalesLine.Amount-InLine."Line Discount Amount");
+                          END;
+                        END;
+                        */
+        
+                        //process only if type = percentage. Other than that will be treated as regular order with web disc etc.
+                        //Store bulk discount to Additional Discount %. Removed web discount
+                        //BG Discount calculated based on value after additional discount
+                        IF (InHeader."Discount Percentage" = 0) AND (InLine."Line Discount Amount"<>0) THEN BEGIN
+                          IF InLine."Line Discount Type"=InLine."Line Discount Type"::Percentage THEN BEGIN
+                            IF InLine."Line Discount Amount" < 100 THEN BEGIN
+                              SalesLine."Inv. Discount Amount" := 0;
+        
+                              SalesLine.VALIDATE("Web Discount Code", '');
+                              SalesLine.VALIDATE("Web Discount %",0);
+                              SalesLine.VALIDATE("Web Discount Amt. to Inv.",0);
+        
+                              SalesLine.VALIDATE("Additional Discount %", InLine."Line Discount Amount");
+                              SalesLine.VALIDATE("Inv. Discount Amount", SalesLine."Additional Discount Amount");
+                              SalesLine.VALIDATE("Buying Group Discount %");
+                              SalesLine.VALIDATE("B.Group Discount Amt. to Inv.",
+                                ROUND(SalesLine."Buying Group Discount Amount" * SalesLine."Qty. to Invoice"
+                                    / SalesLine.Quantity,0.01));
+        
+                            END;
+                          END;
+                        END;
+                        //CEN3.053 End
+                        //--------------------------------------------------
+                      END;
+        
+                      SalesLine.MODIFY(TRUE);
+                      COMMIT;
+                      LOCKTIMEOUT(FALSE); //CEN4.032
+                      IF SalesLine."Qty. to Ship"<>0 THEN
+                        ShipOrder := TRUE;
+        
+                    END ELSE BEGIN //CEN3.011.2 - Start - if comments from Eyerep - SpecialInstruction -
+                      //Join Incoming Order Line - Item Description + Item Description 2 -> Sales Comment Line table
+        
+                      SalesCommentLine.SETRANGE("Document Type",SalesCommentLine."Document Type"::Order);
+                      SalesCommentLine.SETRANGE("No.",SalesLine."Document No.");
+                      SalesCommentLine.SETRANGE("Document Line No.",0);
+                      IF SalesCommentLine.FIND('+') THEN
+                        NextLineNo := SalesCommentLine."Line No." + 10000
+                      ELSE
+                        NextLineNo := 10000;
+        
+                      SalesCommentLine."Document Type" := SalesCommentLine."Document Type"::Order;
+                      SalesCommentLine."No." := SalesLine."Document No.";
+                      SalesCommentLine."Document Line No." := 0;
+                      SalesCommentLine."Line No." := NextLineNo;
+        
+                      SalesCommentLine.Comment := DELCHR(InLine."Item Description",'<>',' ') + ' ' +
+                        DELCHR(InLine."Item Description 2",'<>',' ');
+        
+                      SalesCommentLine.INSERT(TRUE);
+                    END;  //CEN3.011.2 - End
+        
+                  END;
+        
+                  InLine."Sales Order No." := SalesLine."Document No.";
+                  InLine."Sales Order Line No." := SalesLine."Line No.";
+                  InLine.MODIFY;
+                UNTIL InLine.NEXT=0;
+                IF SalesHeader."No."<>'' THEN BEGIN
+                  IF CanReleaseOrder THEN
+                    FinalizeOrder(SalesHeader."No.", FileNo, FileType, InHeader."Order No.", '')
+                  ELSE
+                    FinalizeOrder(SalesHeader."No.", FileNo, FileType, InHeader."Order No.", Text003);
+                END;
+        
+              END;
+            END;
+          UNTIL InHeader.NEXT=0;
+        END;
+
+    end;
+
+    procedure CreateOrderHeader(var pInHeader: Record "Incoming Order Header";var pSalesHeader: Record "Sales Header")
+    var
+        lSalesCommentLine: Record "Sales Comment Line";
+        lNextLineNo: Integer;
+        lSalesPurchaser: Record "Salesperson/Purchaser";
+    begin
+        pSalesHeader."Document Type" := pSalesHeader."Document Type" :: Order;
+        pSalesHeader."Document Date" := WORKDATE;
+        pSalesHeader."EDI Order Flag" := TRUE;  //CEN3.001
+
+        IF pInHeader."Order Source Code"<>'' THEN
+          pSalesHeader."Order Source Code" := pInHeader."Order Source Code"; //CEN3.011.2
+
+        IF pInHeader."Order Type" <> '' THEN
+          pSalesHeader.VALIDATE("Order Type Code", pInHeader."Order Type"); //CEN3.053.1
+
+        IF (pInHeader."File Type" = pInHeader."File Type"::WEBEDI) THEN
+          pSalesHeader."EDI Order Flag" := TRUE;
+        pSalesHeader."Centennial Reference" := FORMAT(pInHeader."File Type");
+        pSalesHeader."Sell-to Customer No." := pInHeader."Sell-To Customer No.";
+        pSalesHeader.INSERT(TRUE);
+        COMMIT;
+        LOCKTIMEOUT(FALSE); //CEN4.032
+        pSalesHeader.VALIDATE("Sell-to Customer No.");
+        IF pInHeader."Location Code"<>'' THEN
+          pSalesHeader.VALIDATE("Location Code", pInHeader."Location Code");
+        //CEN3.001 uncomment following lines to have All Orders to be shipped from NOR
+        //ELSE
+        //  pSalesHeader.VALIDATE("Location Code", DefaultLocation);
+
+        IF (pInHeader."Payment Terms Code"<>'') AND   //CEN3.006
+          (pInHeader."Payment Terms Code"<>pSalesHeader."Payment Terms Code") THEN
+          pSalesHeader.VALIDATE("Payment Terms Code", pInHeader."Payment Terms Code");
+
+        IF pInHeader."Order Type" <> '' THEN
+          pSalesHeader.VALIDATE("Order Type Code", pInHeader."Order Type")
+        ELSE
+          pSalesHeader.VALIDATE("Order Type Code", DefaultOrderType);
+
+        IF pSalesHeader."Location Code" = '' THEN
+          pSalesHeader.VALIDATE("Location Code", DefaultLocation);
+
+        //CEN4.006 moved after modify:
+        //IF pInHeader."Campaign Code"<>'' THEN
+        //  pSalesHeader.VALIDATE("Campaign No.", pInHeader."Campaign Code");
+
+        IF pInHeader."Ship-To Code"<>'' THEN BEGIN   //Ship-to Code has more priority over address
+          pSalesHeader.VALIDATE("Ship-to Code", pInHeader."Ship-To Code");
+        END ELSE BEGIN
+          IF pInHeader."Ship-to Address"<>'' THEN BEGIN
+            pSalesHeader.VALIDATE("Ship-to Name", pInHeader."Ship-to Name");
+            pSalesHeader.VALIDATE("Ship-to Name 2", pInHeader."Ship-to Name 2");
+            pSalesHeader.VALIDATE("Ship-to Address", pInHeader."Ship-to Address");
+            pSalesHeader.VALIDATE("Ship-to Address 2", pInHeader."Ship-to Address 2");
+            pSalesHeader.VALIDATE("Ship-to City", pInHeader."Ship-to City");
+            pSalesHeader.VALIDATE("Ship-to Contact", pInHeader."Ship-to Contact");
+            pSalesHeader.VALIDATE("Ship-to Post Code", pInHeader."Ship-to Post Code");
+            pSalesHeader.VALIDATE("Ship-to County", pInHeader."Ship-to County");
+            pSalesHeader.VALIDATE("Ship-to Country/Region Code", pInHeader."Ship-to Country/Region Code");
+          END;
+        END;
+
+        IF pInHeader."Shipment Method Code"<>'' THEN
+          pSalesHeader.VALIDATE("Shipment Method Code", pInHeader."Shipment Method Code");
+
+        IF (pInHeader."Shipping Agent Code"<>'') AND (pInHeader."Shipping Agent Service Code"<>'') THEN BEGIN
+          pSalesHeader.VALIDATE("Shipping Agent Code", pInHeader."Shipping Agent Code");
+          pSalesHeader.VALIDATE("Shipping Agent Service Code", pInHeader."Shipping Agent Service Code");
+        END;
+
+        IF pInHeader."Discount Percentage"<>0 THEN
+          pSalesHeader.VALIDATE("Additional Invoice Discount %", pInHeader."Discount Percentage");
+
+        pSalesHeader."External Document No." := COPYSTR(pInHeader."File Name", 1, 20);
+        pSalesHeader."EDI Order Flag" := TRUE;
+        pSalesHeader.VALIDATE("Posting Date", WORKDATE);
+        IF (pInHeader."Order Date" <> 0D) AND (pInHeader."Order Date">TODAY) THEN
+          pSalesHeader.VALIDATE("Order Date", pInHeader."Order Date");
+        IF (pInHeader."Cancellation Date" <> 0D) AND (pInHeader."Cancellation Date">TODAY) THEN
+          pSalesHeader.VALIDATE("Cancellation Date", pInHeader."Cancellation Date");
+        IF (pInHeader."Requested Shipment Date" <> 0D) AND (pInHeader."Requested Shipment Date">TODAY) THEN
+          pSalesHeader.VALIDATE("Shipment Date", pInHeader."Requested Shipment Date");
+
+        pSalesHeader."Your Reference" := pInHeader."Customer PO";
+        IF pSalesHeader."Your Reference" = '' THEN BEGIN
+          pSalesHeader."Your Reference" := FORMAT(pInHeader."File Type");
+        END;
+
+        //CEN4.006:
+        IF (pInHeader."Salesperson Code" <> '') AND lSalesPurchaser.GET(pInHeader."Salesperson Code") THEN
+          pSalesHeader.VALIDATE("Salesperson Code", pInHeader."Salesperson Code");
+
+        pInHeader."Sales Order No." := pSalesHeader."No.";
+        pInHeader.MODIFY;
+
+        pSalesHeader.MODIFY(TRUE);
+
+        //CEN4.006: ----------------
+        IF pInHeader."Campaign Code"<>'' THEN
+          pSalesHeader.VALIDATE("Campaign No.", pInHeader."Campaign Code");
+
+        pSalesHeader.MODIFY(TRUE);
+        //--------------------------
+
+        COMMIT;
+        LOCKTIMEOUT(FALSE); //CEN4.032
+
+        //CEN3.065 - start
+        CLEAR(lSalesCommentLine);
+        IF pInHeader."Approved User ID" <> '' THEN BEGIN
+          lSalesCommentLine.SETRANGE("Document Type",lSalesCommentLine."Document Type"::Order);
+          lSalesCommentLine.SETRANGE("No.",pSalesHeader."No.");
+          lSalesCommentLine.SETRANGE("Document Line No.",0);
+          IF lSalesCommentLine.FIND('+') THEN
+            lNextLineNo := lSalesCommentLine."Line No." + 10000
+          ELSE
+            lNextLineNo := 10000;
+
+          lSalesCommentLine."Document Type" := lSalesCommentLine."Document Type"::Order;
+          lSalesCommentLine."No." := pSalesHeader."No.";
+          lSalesCommentLine."Document Line No." := 0;
+          lSalesCommentLine."Line No." := lNextLineNo;
+          lSalesCommentLine.Comment := 'Approved by ' + pInHeader."Approved User ID";
+          lSalesCommentLine.INSERT(TRUE);
+        END;
+        //CEN3.065 - end
+    end;
+
+    procedure FinalizeOrder(pSalesOrderNo: Code[20];pFileNo: Code[20];pFileType: Integer;pOrderNo: Code[20];pNotReleasedReason: Text[100])
+    var
+        InHeader2: Record "Incoming Order Header";
+        SRSetup: Record "Sales & Receivables Setup";
+        SalesPost: Codeunit "Sales-Post";
+        ReleaseOrder: Codeunit "Release Sales Document";
+        InvoiceNo: Code[20];
+        SalesHeader: Record "Sales Header";
+        SalesLine: Record "Sales Line";
+        CanPostOrder: Boolean;
+        CanPrintPT: Boolean;
+        SentToPrinter: Boolean;
+    begin
+        //Post Order
+        SentToPrinter := FALSE;
+        SalesHeader.GET(SalesHeader."Document Type"::Order, pSalesOrderNo);
+        CLEAR(InvoiceNo);
+        SRSetup.GET;
+        CLEAR(InHeader2);
+        InHeader2.GET(pFileType, pFileNo, pOrderNo);
+
+        CLEAR(SalesLine);
+        SalesLine.SETRANGE("Document Type", SalesHeader."Document Type");
+        SalesLine.SETRANGE("Document No.", SalesHeader."No.");
+        SalesLine.SETFILTER("Qty. to Ship", '<>%1', 0);
+        IF SalesLine.FINDSET THEN
+          CanPostOrder := TRUE;
+
+        //CEN3.001 Start
+        CLEAR(SalesLine);
+        SalesLine.SETRANGE("Document Type", SalesHeader."Document Type");
+        SalesLine.SETRANGE("Document No.", SalesHeader."No.");
+        SalesLine.SETFILTER(Type, '%1|%2', SalesLine.Type::Item, SalesLine.Type::"G/L Account");
+        SalesLine.SETFILTER(Quantity, '<>%1', 0);
+        IF SalesLine.FIND('-') THEN  //CEN3.005 Replaced FindSET with FIND('-')
+          CanPrintPT := TRUE;
+        //CEN3.001 End
+
+        //CEN3.059
+        IF InHeader2."Disable PT Print" THEN
+          CanPrintPT := FALSE;
+
+        IF pNotReleasedReason = '' THEN BEGIN
+          COMMIT;
+          LOCKTIMEOUT(FALSE); //CEN4.032
+          ReleaseOrder.RUN(SalesHeader);
+          IF SalesHeader."Order On Hold" = '' THEN BEGIN
+            // CEN3.001 IF (NOT InHeader2."Ship and Invoice Order") AND CanPostOrder THEN
+            IF (NOT InHeader2."Ship and Invoice Order") AND CanPrintPT THEN BEGIN
+              ReleaseOrder.PrintPickTicket(SalesHeader, FALSE);
+              SentToPrinter := TRUE;
+            END;
+            IF (InHeader2."Ship and Invoice Order") AND CanPostOrder THEN BEGIN
+              SalesHeader.Ship := TRUE;
+              SalesHeader.Invoice := TRUE;
+              SalesPost.RUN(SalesHeader);
+              InvoiceNo :=  SalesHeader."Last Posting No.";
+
+              //Print Invoices
+              CLEAR(SalesInvHeader);
+              SalesInvHeader."No." := SalesHeader."Last Posting No.";
+              SalesInvHeader.SETRECFILTER;
+              SalesInvHeader.FINDFIRST;
+              PrintInvoice;
+            END;
+          END ELSE
+            pNotReleasedReason := Text002;
+        END;
+
+        IF (NOT InHeader2."Order Processed") AND (NOT InHeader2."Critical Error in Order") THEN BEGIN
+          InHeader2."Order Processed" := TRUE;
+          InHeader2."Order Processed Date" := WORKDATE;
+          InHeader2."Order Processed Time":= TIME;
+          InHeader2."Sent to Printer" := SentToPrinter;
+          IF pNotReleasedReason<>'' THEN
+            InHeader2."Not Released Reason" := pNotReleasedReason
+          ELSE
+            InHeader2."Order Released" := TRUE;
+          InHeader2."Sales Invoice No." := InvoiceNo;
+          InHeader2.MODIFY;
+        END;
+        //ERROR('Temp');
+        COMMIT;
+        LOCKTIMEOUT(FALSE); //CEN4.032
+    end;
+
+    procedure CheckItem(ItemNo: Code[20]): Text[100]
+    var
+        lItem: Record Item;
+        KitBom: Record "Production BOM Header";
+        KitLines: Record "Production BOM Line";
+        lItem2: Record Item;
+    begin
+        //CEN4.001 Old version is stored as CheckItemOld
+        IF lItem.GET(ItemNo) THEN BEGIN
+          lItem.CALCFIELDS(Sale);
+          IF lItem.Blocked THEN BEGIN
+            EXIT(Text005);
+          END;
+          CASE lItem.Sale OF
+            lItem.Sale::"0": BEGIN
+                             EXIT(STRSUBSTNO(Text006, FORMAT(lItem.Sale)));
+                           END;
+            lItem.Sale::"1":
+                           IF lItem."Release Date" > WORKDATE THEN BEGIN
+                             EXIT(STRSUBSTNO(Text006, FORMAT(lItem.Sale)));
+                           END;
+          END;
+
+          IF lItem."Sold with Clip" THEN BEGIN
+            IF NOT lItem2.GET(lItem."Clip No.") THEN
+              EXIT(COPYSTR(STRSUBSTNO(Text032, lItem."Clip No."), 1,100));
+            lItem2.CALCFIELDS(Sale);
+            IF lItem2.Blocked THEN BEGIN
+              EXIT(COPYSTR(STRSUBSTNO(Text033, lItem."Clip No."), 1,100));
+            END;
+            CASE lItem2.Sale OF
+              lItem2.Sale::"0": BEGIN
+                                 EXIT(COPYSTR(STRSUBSTNO(Text034, lItem."Clip No."), 1,100));
+                               END;
+              lItem2.Sale::"1":
+                             IF lItem."Release Date" > WORKDATE THEN BEGIN
+                               EXIT(COPYSTR(STRSUBSTNO(Text034, lItem."Clip No."), 1,100));
+                             END;
+            END;
+          END;
+
+          IF lItem."Sold with Case" THEN BEGIN
+            IF NOT lItem2.GET(lItem."Case No.") THEN
+              EXIT(COPYSTR(STRSUBSTNO(Text035, lItem."Case No."), 1,100));
+            lItem2.CALCFIELDS(Sale);
+            IF lItem2.Blocked THEN BEGIN
+              EXIT(COPYSTR(STRSUBSTNO(Text036, lItem."Case No."), 1,100));
+            END;
+            CASE lItem2.Sale OF
+              lItem2.Sale::"0": BEGIN
+                                 EXIT(COPYSTR(STRSUBSTNO(Text037, lItem."Case No."), 1,100));
+                               END;
+              lItem2.Sale::"1":
+                             IF lItem."Release Date" > WORKDATE THEN BEGIN
+                               EXIT(COPYSTR(STRSUBSTNO(Text037, lItem."Case No."), 1,100));
+                             END;
+            END;
+          END;
+
+          //IF (lItem."Kit BOM No."<>'') AND (lItem."Automatic Build Kit BOM") THEN BEGIN //CEN4.001
+          lItem.CALCFIELDS("Assembly BOM");
+          IF (lItem."Assembly Policy" = lItem."Assembly Policy"::"Assemble-to-Order") AND (lItem."Assembly BOM") THEN BEGIN
+            BOMComponent.RESET;
+            BOMComponent.SETRANGE("Parent Item No.",lItem."No.");
+            IF NOT BOMComponent.FINDFIRST THEN
+              EXIT(COPYSTR(STRSUBSTNO(Text025, lItem."No."), 1,100));
+
+            IF lItem.Reserve<>lItem.Reserve::Never THEN
+              EXIT(COPYSTR(STRSUBSTNO(Text030, lItem."No."), 1,100));
+
+            BOMComponent.RESET;
+            BOMComponent.SETRANGE("Parent Item No.",lItem."No.");
+            BOMComponent.SETRANGE(Type, BOMComponent.Type::Item);
+            IF BOMComponent.FIND('-') THEN
+              REPEAT
+                IF NOT lItem2.GET(BOMComponent."No.") THEN
+                  EXIT(COPYSTR(STRSUBSTNO(Text028, BOMComponent."No."), 1,100));
+                lItem2.CALCFIELDS(Sale);
+                IF lItem2.Blocked THEN BEGIN
+                  EXIT(COPYSTR(STRSUBSTNO(Text026, BOMComponent."No."), 1,100));
+                END;
+                CASE lItem2.Sale OF
+                  lItem2.Sale::"0": BEGIN
+                                     EXIT(COPYSTR(STRSUBSTNO(Text027, BOMComponent."No."), 1,100));
+                                   END;
+                  lItem2.Sale::"1":
+                                 IF lItem."Release Date" > WORKDATE THEN BEGIN
+                                   EXIT(COPYSTR(STRSUBSTNO(Text027, BOMComponent."No."), 1,100));
+                                 END;
+                END;
+
+              UNTIL BOMComponent.NEXT=0
+          END;
+
+
+
+        END ELSE
+          EXIT(Text004);
+
+
+        EXIT('');
+    end;
+
+    procedure CheckGLAccount(GLAccountNo: Code[20]): Text[100]
+    var
+        GLAccount: Record "G/L Account";
+    begin
+        IF NOT GLAccount.GET(GLAccountNo) THEN
+          EXIT(Text022);
+
+        IF GLAccount."Direct Posting" THEN
+          EXIT(Text023);
+    end;
+
+    procedure GetAvailQty(ItemNo: Code[20];LocationCode: Code[10];EndDate: Date) AvailQty: Decimal
+    var
+        Item: Record Item;
+        Item2: Record Item;
+        AvailableQty: Codeunit "Available to Promise";
+        GrReq: Decimal;
+        SchRec: Decimal;
+        DateForm: DateFormula;
+        LowestQtyAvailable: Decimal;
+        ProductionBOMLine: Record "Production BOM Line";
+        ProductionBOM: Record "Production BOM Header";
+        KitCompQtyAvailable: Decimal;
+    begin
+        //CEN4.001 Original version stored as GetAvailQtyOld - replaced production bom tables with BOM Component table
+        // This function checks how many of particular item we have in stock in the specific warehouse
+        Item.GET(ItemNo);
+
+        //IF (Item."Automatic Build Kit BOM") AND (Item."Kit BOM No."<>'') THEN BEGIN //Check stock of components
+        Item.CALCFIELDS("Assembly BOM");
+        IF (Item."Assembly Policy" = Item."Assembly Policy"::"Assemble-to-Order") AND Item."Assembly BOM" THEN BEGIN
+          LowestQtyAvailable := 0;
+
+          CLEAR(BOMComponent);
+          BOMComponent.SETRANGE("Parent Item No.", ItemNo);
+          BOMComponent.SETRANGE(Type, BOMComponent.Type::Item);
+          IF BOMComponent.FIND('-') THEN BEGIN
+            LowestQtyAvailable := 100000000;
+            REPEAT
+              Item2.GET(BOMComponent."No.");
+              Item2.SETRANGE(Item2."Location Filter", LocationCode);
+              Item2.SETRANGE(Item2."Date Filter", 0D, EndDate);
+              KitCompQtyAvailable:=AvailableQty.QtyAvailabletoPromise(Item2,GrReq,SchRec,0D,0,DateForm)/BOMComponent."Quantity per";
+              IF KitCompQtyAvailable<LowestQtyAvailable THEN
+                LowestQtyAvailable := KitCompQtyAvailable;
+            UNTIL BOMComponent.NEXT=0;
+          END;
+
+          AvailQty := ROUND(LowestQtyAvailable, 1, '<');
+        END ELSE BEGIN
+          Item.SETRANGE(Item."Location Filter", LocationCode);
+          Item.SETRANGE(Item."Date Filter", 0D, EndDate);
+          AvailQty:=AvailableQty.QtyAvailabletoPromise(Item,GrReq,SchRec,0D,0,DateForm);
+        END;
+    end;
+
+    procedure PrintInvoice()
+    var
+        ReportSelection1: Record "Report Selections";
+        PrinterOverride: Record "Printer Override";
+        SRSetup: Record "Sales & Receivables Setup";
+    begin
+        SRSetup.GET;
+        ReportSelection1.SETRANGE(Usage,ReportSelection1.Usage::"S.Invoice");
+        ReportSelection1.SETFILTER("Report ID",'<>0');
+        ReportSelection1.FIND('-');
+        REPEAT
+          //Add code here if required to print of different printers
+        
+          /*IF PrinterOverride.GET(USERID,ReportSelection1."Report ID") THEN
+            PrinterOverride.DELETE;
+          PrinterOverride."User ID" := USERID;
+          PrinterOverride."Report ID" := ReportSelection1."Report ID";
+          CASE SalesInvHeader."Location Code" OF
+            'UMI' : PrinterOverride."Printer Name" := SRSetup."UTMC Missis. Invoice Printer";
+            'UOT' : PrinterOverride."Printer Name" := SRSetup."UTMC Ottawa Invoice Printer";
+            'UCA' : PrinterOverride."Printer Name" := SRSetup."UTMC Calgary Invoice Printer";
+          END;
+          IF PrinterOverride."Printer Name" <> '' THEN
+            PrinterOverride.INSERT; */
+          REPORT.RUN(ReportSelection1."Report ID",FALSE,FALSE,SalesInvHeader);   //Temporary Suspend printing
+                                                                                 //by commenting this line
+        UNTIL ReportSelection1.NEXT = 0;
+
+    end;
+
+    local procedure CheckAdditItem(pItemNo: Code[20];pCustomerNo: Code[20];pCampaignNo: Code[20]): Text[100]
+    var
+        lrecAdditionalItem: Record "Additional Item";
+        lItem: Record Item;
+    begin
+        lrecAdditionalItem.RESET;
+        lrecAdditionalItem.SETCURRENTKEY("Parent Item No.","Customer No.","Campaign No.","Line Type","No.","Start Date");
+        lrecAdditionalItem.SETRANGE("Parent Item No.",pItemNo);
+        lrecAdditionalItem.SETRANGE("Customer No.",pCustomerNo);
+        lrecAdditionalItem.SETRANGE("Campaign No.",pCampaignNo);
+        lrecAdditionalItem.SETRANGE("Line Type",lrecAdditionalItem."Line Type"::Item);
+        lrecAdditionalItem.SETRANGE("Start Date",0D,WORKDATE);
+        lrecAdditionalItem.SETFILTER("End Date",'%1|>=%2',0D,WORKDATE);
+        IF lrecAdditionalItem.FIND('+') THEN BEGIN
+          REPEAT
+            IF lItem.GET(lrecAdditionalItem."No.") THEN BEGIN
+              lItem.CALCFIELDS(Sale);
+              IF lItem.Blocked THEN BEGIN
+                EXIT(Text040);
+              END;
+              CASE lItem.Sale OF
+                lItem.Sale::"0": BEGIN
+                                 EXIT(STRSUBSTNO(Text042, FORMAT(lItem.Sale)));
+                               END;
+                lItem.Sale::"1":
+                               IF lItem."Release Date" > WORKDATE THEN BEGIN
+                                 EXIT(STRSUBSTNO(Text042, FORMAT(lItem.Sale)));
+                               END;
+              END;
+            END ELSE
+              EXIT(Text041);
+          UNTIL lrecAdditionalItem.NEXT(-1) = 0;
+        END ELSE BEGIN
+          lrecAdditionalItem.SETRANGE("Customer No.",'');
+          IF lrecAdditionalItem.FIND('+') THEN BEGIN
+            REPEAT
+              IF lItem.GET(lrecAdditionalItem."No.") THEN BEGIN
+                lItem.CALCFIELDS(Sale);
+                IF lItem.Blocked THEN BEGIN
+                  EXIT(Text040);
+                END;
+                CASE lItem.Sale OF
+                  lItem.Sale::"0": BEGIN
+                                   EXIT(STRSUBSTNO(Text042, FORMAT(lItem.Sale)));
+                                 END;
+                  lItem.Sale::"1":
+                                 IF lItem."Release Date" > WORKDATE THEN BEGIN
+                                   EXIT(STRSUBSTNO(Text042, FORMAT(lItem.Sale)));
+                                 END;
+                END;
+              END ELSE
+                EXIT(Text041);
+            UNTIL lrecAdditionalItem.NEXT(-1) = 0;
+          END ELSE BEGIN
+            lrecAdditionalItem.SETRANGE("Campaign No.",'');
+            IF lrecAdditionalItem.FIND('+') THEN BEGIN
+              REPEAT
+                IF lItem.GET(lrecAdditionalItem."No.") THEN BEGIN
+                  lItem.CALCFIELDS(Sale);
+                  IF lItem.Blocked THEN BEGIN
+                    EXIT(Text040);
+                  END;
+                  CASE lItem.Sale OF
+                    lItem.Sale::"0": BEGIN
+                                     EXIT(STRSUBSTNO(Text042, FORMAT(lItem.Sale)));
+                                   END;
+                    lItem.Sale::"1":
+                                   IF lItem."Release Date" > WORKDATE THEN BEGIN
+                                     EXIT(STRSUBSTNO(Text042, FORMAT(lItem.Sale)));
+                                   END;
+                  END;
+                END ELSE
+                  EXIT(Text041);
+              UNTIL lrecAdditionalItem.NEXT(-1) = 0;
+            END;
+          END;
+        END;
+
+        EXIT('');
+    end;
+
+    local procedure CheckPromoItem(pCustomerNo: Code[20];pCampaignNo: Code[20]): Text[100]
+    var
+        lrecAdditionalItem: Record "Additional Item";
+        lItem: Record Item;
+    begin
+        lrecAdditionalItem.RESET;
+        lrecAdditionalItem.SETCURRENTKEY("Parent Item No.","Customer No.","Campaign No.","Line Type","No.","Start Date");
+        lrecAdditionalItem.SETRANGE("Parent Item No.",'');
+        lrecAdditionalItem.SETRANGE("Customer No.",pCustomerNo);
+        lrecAdditionalItem.SETRANGE("Campaign No.",pCampaignNo);
+        lrecAdditionalItem.SETRANGE("Line Type",lrecAdditionalItem."Line Type"::Item);
+        lrecAdditionalItem.SETRANGE("Start Date",0D,WORKDATE);
+        lrecAdditionalItem.SETFILTER("End Date",'%1|>=%2',0D,WORKDATE);
+        IF lrecAdditionalItem.FIND('+') THEN BEGIN
+          REPEAT
+            IF lItem.GET(lrecAdditionalItem."No.") THEN BEGIN
+              lItem.CALCFIELDS(Sale);
+              IF lItem.Blocked THEN BEGIN
+                EXIT(Text040);
+              END;
+              CASE lItem.Sale OF
+                lItem.Sale::"0": BEGIN
+                                 EXIT(STRSUBSTNO(Text042, FORMAT(lItem.Sale)));
+                               END;
+                lItem.Sale::"1":
+                               IF lItem."Release Date" > WORKDATE THEN BEGIN
+                                 EXIT(STRSUBSTNO(Text042, FORMAT(lItem.Sale)));
+                               END;
+              END;
+            END ELSE
+              EXIT(Text041);
+          UNTIL lrecAdditionalItem.NEXT(-1) = 0;
+        END ELSE BEGIN
+          lrecAdditionalItem.SETRANGE("Customer No.",'');
+          IF lrecAdditionalItem.FIND('+') THEN BEGIN
+            REPEAT
+              IF lItem.GET(lrecAdditionalItem."No.") THEN BEGIN
+                lItem.CALCFIELDS(Sale);
+                IF lItem.Blocked THEN BEGIN
+                  EXIT(Text040);
+                END;
+                CASE lItem.Sale OF
+                  lItem.Sale::"0": BEGIN
+                                   EXIT(STRSUBSTNO(Text042, FORMAT(lItem.Sale)));
+                                 END;
+                  lItem.Sale::"1":
+                                 IF lItem."Release Date" > WORKDATE THEN BEGIN
+                                   EXIT(STRSUBSTNO(Text042, FORMAT(lItem.Sale)));
+                                 END;
+                END;
+              END ELSE
+                EXIT(Text041);
+            UNTIL lrecAdditionalItem.NEXT(-1) = 0;
+          END;
+        END;
+
+        EXIT('');
+    end;
+
+    procedure GetAvailQtyOld(ItemNo: Code[20];LocationCode: Code[10];EndDate: Date) AvailQty: Decimal
+    var
+        Item: Record Item;
+        Item2: Record Item;
+        AvailableQty: Codeunit "Available to Promise";
+        GrReq: Decimal;
+        SchRec: Decimal;
+        DateForm: DateFormula;
+        LowestQtyAvailable: Decimal;
+        ProductionBOMLine: Record "Production BOM Line";
+        ProductionBOM: Record "Production BOM Header";
+        KitCompQtyAvailable: Decimal;
+    begin
+        // This function checks how many of particular item we have in stock in the specific warehouse
+        /*
+        Item.GET(ItemNo);
+        
+        IF (Item."Automatic Build Kit BOM") AND (Item."Kit BOM No."<>'') THEN BEGIN //Check stock of components
+          LowestQtyAvailable := 0;
+          IF ProductionBOM.GET(Item."Kit BOM No.") THEN BEGIN
+            CLEAR(ProductionBOMLine);
+            ProductionBOMLine.SETRANGE("Production BOM No.", ProductionBOM."No.");
+            ProductionBOMLine.SETRANGE("Version Code", '');
+            ProductionBOMLine.SETRANGE(Type, ProductionBOMLine.Type::Item);
+            IF ProductionBOMLine.FIND('-') THEN BEGIN
+              LowestQtyAvailable := 100000000;
+              REPEAT
+                Item2.GET(ProductionBOMLine."No.");
+                Item2.SETRANGE(Item2."Location Filter", LocationCode);
+                Item2.SETRANGE(Item2."Date Filter", 0D, EndDate);
+                KitCompQtyAvailable:=AvailableQty.QtyAvailabletoPromise(Item2,GrReq,SchRec,0D,0,DateForm)/ProductionBOMLine.Quantity;
+                IF KitCompQtyAvailable<LowestQtyAvailable THEN
+                  LowestQtyAvailable := KitCompQtyAvailable;
+              UNTIL ProductionBOMLine.NEXT=0;
+            END;
+          END;
+          AvailQty := ROUND(LowestQtyAvailable, 1, '<');
+        END ELSE BEGIN
+          Item.SETRANGE(Item."Location Filter", LocationCode);
+          Item.SETRANGE(Item."Date Filter", 0D, EndDate);
+          AvailQty:=AvailableQty.QtyAvailabletoPromise(Item,GrReq,SchRec,0D,0,DateForm);
+        END;
+        */
+
+    end;
+
+    procedure CheckItemOld(ItemNo: Code[20]): Text[100]
+    var
+        lItem: Record Item;
+        KitBom: Record "Production BOM Header";
+        KitLines: Record "Production BOM Line";
+        lItem2: Record Item;
+    begin
+        /*
+        IF lItem.GET(ItemNo) THEN BEGIN
+          lItem.CALCFIELDS(Sale);
+          IF lItem.Blocked THEN BEGIN
+            EXIT(Text005);
+          END;
+          CASE lItem.Sale OF
+            lItem.Sale::No: BEGIN
+                             EXIT(STRSUBSTNO(Text006, FORMAT(lItem.Sale)));
+                           END;
+            lItem.Sale::"No (Until Release Date)":
+                           IF lItem."Release Date" > WORKDATE THEN BEGIN
+                             EXIT(STRSUBSTNO(Text006, FORMAT(lItem.Sale)));
+                           END;
+          END;
+        
+          IF lItem."Sold with Clip" THEN BEGIN
+            IF NOT lItem2.GET(lItem."Clip No.") THEN
+              EXIT(COPYSTR(STRSUBSTNO(Text032, lItem."Clip No."), 1,100));
+            lItem2.CALCFIELDS(Sale);
+            IF lItem2.Blocked THEN BEGIN
+              EXIT(COPYSTR(STRSUBSTNO(Text033, lItem."Clip No."), 1,100));
+            END;
+            CASE lItem2.Sale OF
+              lItem2.Sale::No: BEGIN
+                                 EXIT(COPYSTR(STRSUBSTNO(Text034, lItem."Clip No."), 1,100));
+                               END;
+              lItem2.Sale::"No (Until Release Date)":
+                             IF lItem."Release Date" > WORKDATE THEN BEGIN
+                               EXIT(COPYSTR(STRSUBSTNO(Text034, lItem."Clip No."), 1,100));
+                             END;
+            END;
+          END;
+        
+          IF lItem."Sold with Case" THEN BEGIN
+            IF NOT lItem2.GET(lItem."Case No.") THEN
+              EXIT(COPYSTR(STRSUBSTNO(Text035, lItem."Case No."), 1,100));
+            lItem2.CALCFIELDS(Sale);
+            IF lItem2.Blocked THEN BEGIN
+              EXIT(COPYSTR(STRSUBSTNO(Text036, lItem."Case No."), 1,100));
+            END;
+            CASE lItem2.Sale OF
+              lItem2.Sale::No: BEGIN
+                                 EXIT(COPYSTR(STRSUBSTNO(Text037, lItem."Case No."), 1,100));
+                               END;
+              lItem2.Sale::"No (Until Release Date)":
+                             IF lItem."Release Date" > WORKDATE THEN BEGIN
+                               EXIT(COPYSTR(STRSUBSTNO(Text037, lItem."Case No."), 1,100));
+                             END;
+            END;
+          END;
+        
+          IF (lItem."Kit BOM No."<>'') AND (lItem."Automatic Build Kit BOM") THEN BEGIN
+            IF NOT KitBom.GET(lItem."Kit BOM No.") THEN
+              EXIT(COPYSTR(STRSUBSTNO(Text025, lItem."Kit BOM No."), 1,100));
+            IF lItem.Reserve<>lItem.Reserve::Never THEN
+              EXIT(COPYSTR(STRSUBSTNO(Text030, lItem."Kit BOM No."), 1,100));
+            CLEAR(KitLines);
+            KitLines.SETRANGE("Production BOM No.", KitBom."No.");
+            KitLines.SETRANGE(Type, KitLines.Type::Item);
+            IF KitLines.FIND('-') THEN
+              REPEAT
+                IF NOT lItem2.GET(KitLines."No.") THEN
+                  EXIT(COPYSTR(STRSUBSTNO(Text028, KitLines."No."), 1,100));
+                lItem2.CALCFIELDS(Sale);
+                IF lItem2.Blocked THEN BEGIN
+                  EXIT(COPYSTR(STRSUBSTNO(Text026, KitLines."No."), 1,100));
+                END;
+                CASE lItem2.Sale OF
+                  lItem2.Sale::No: BEGIN
+                                     EXIT(COPYSTR(STRSUBSTNO(Text027, KitLines."No."), 1,100));
+                                   END;
+                  lItem2.Sale::"No (Until Release Date)":
+                                 IF lItem."Release Date" > WORKDATE THEN BEGIN
+                                   EXIT(COPYSTR(STRSUBSTNO(Text027, KitLines."No."), 1,100));
+                                 END;
+                END;
+        
+              UNTIL KitLines.NEXT=0
+          END;
+        END ELSE
+          EXIT(Text004);
+        
+        EXIT('');
+        */
+
+    end;
+}
+

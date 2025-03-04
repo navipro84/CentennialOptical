@@ -1,0 +1,35 @@
+page 50001 "Test Integration Page"
+{
+    ApplicationArea = All;
+    Caption = 'Test Integration Page';
+    PageType = Card;
+    SourceTable = Customer;
+
+    layout
+    {
+        area(Content)
+        {
+            group(General)
+            {
+                Caption = 'General';
+
+                field(Address; Rec.Address)
+                {
+                    ToolTip = 'Specifies the customer''s address. This address will appear on all sales documents for the customer.';
+                }
+                field("Address 2"; Rec."Address 2")
+                {
+                    ToolTip = 'Specifies additional address information.';
+                }
+            }
+        }
+    }
+    trigger OnOpenPage()
+    begin
+        ImportCU.Run();
+    end;
+
+    var
+        ImportCU: Codeunit "Import Sales File from ADS";
+
+}

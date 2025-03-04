@@ -1,0 +1,300 @@
+codeunit 50155 "Raw to Buffer Transfer"
+{
+    trigger onRun()
+    begin
+
+    end;
+
+    var
+        RawData: Record "Sales Integration Raw";
+        IntHeader: Record "Sales Integration Header";
+        IntLine: Record "Sales Integration Line";
+        IntError2: Record "Integration Error Line";
+        IntError: Record "Integration Error Line";
+
+        IntFileNo: code[20];
+        CurrentOrderNo: Code[20];
+        DateVar: Date;
+        LineNo: Integer;
+        DecimalVar: decimal;
+        IntType: Enum "Integration Type";
+
+    procedure MoveData()
+    var
+        lIntFileLoad: Record "Integration File Load";
+        lCriticalErrorInOrder: Boolean;
+        lOrderNo: Code[10];
+    begin
+        if RawData.FindSet(False) then begin
+            if lIntFileLoad.FindLast then begin
+                IntFileNo := IncStr(lIntFileLoad."File No.");
+            end else
+                IntFileNo := 'FILE00000001';
+            lOrderNo := 'ORD0000001';
+            Repeat
+                if RawData.InvoiceNo <> CurrentOrderNo then begin
+
+                    Clear(IntHeader);
+                    IntHeader."File No." := IntFileNo;
+                    IntHeader."Order No." := lOrderNo;
+                    lOrderNo := IncStr(lOrderNo);
+                    IntHeader."File Name " := 'RAW_TABLE';
+                    IntHeader."Sell-To Customer No." := RawData.CUSTOMER_NO;
+                    IntHeader."Int. Invoice No." := RawData.InvoiceNo;
+                    //IntHeader."Bill-To Customer No." := ;
+                    IntHeader."Customer PO" := RawData.CUSTOMER_PO;
+                    IntHeader."File Loaded Date Time" := CurrentDateTime;
+                    IntHeader."Location Code" := RawData.LOCATION;
+                    if not Evaluate(DateVar, RawData.DATE_SHIPPED) then
+                        DateVar := Today;
+                    IntHeader."Order Date" := DateVar;
+                    IntHeader."Int. Customer Name" := RawData.CUSTOMER_NAME;
+                    IntHeader.Insert;
+                    CurrentOrderNo := RawData.InvoiceNo;
+                    LineNo := 0;
+                end;
+                Clear(IntLine);
+                IntLine."File No." := IntHeader."File No.";
+                IntLine."Order No." := IntHeader."Order No.";
+                LineNo += 10000;
+                IntLine."Line No." := LineNo;
+                IntLine."Item No." := RawData.ITEM_NUMBER;
+                if not Evaluate(DecimalVar, RawData.QTY_SHIPPED) then begin
+                    CreateError(IntLine, true, 'Quantity Shipped cannot be converted to Decimal');
+                    lCriticalErrorInOrder := true;
+                end else
+                    IntLine."Item Quantity" := DecimalVar;
+
+                if not Evaluate(DecimalVar, RawData.NET_PRICE_EXTENSION) then begin
+                    CreateError(IntLine, true, 'Net Price Extension cannot be converted to Decimal');
+                    lCriticalErrorInOrder := true;
+                end else
+                    IntLine."Line Amount" := DecimalVar;
+                IntLine.Insert;
+            Until RawData.Next = 0;
+
+            Clear(lIntFileLoad);
+            lIntFileLoad."File No." := IntFileNo;
+            lIntFileLoad."File Name" := 'Raw_Data';
+            lIntFileLoad."Integration Type" := lIntFileLoad."Integration Type"::Sales;
+            lIntFileLoad."Loaded Date Time" := CurrentDateTime;
+            lIntFileLoad."Critical Error in File" := lCriticalErrorInOrder;
+            lIntFileLoad.Insert;
+
+
+        end;
+        //TODO  - delete raw lines
+
+    end;
+
+    procedure ResetOrderErrors(pIntHeader: Record "Sales Integration Header")
+    var
+        lIntLine: Record "Sales Integration Line";
+        lIntErrorline: Record "Integration Error Line";
+
+    begin
+        if pIntHeader."Critical Error In Order" then
+            Error('You cannot reset errors when there is a Critical Error in order');
+        pIntHeader."Error In Order" := false;
+        pIntHeader.Modify;
+
+        lIntLine.SetRange("File No.", pIntHeader."File No.");
+        lIntLine.SetRange("Order No.", pIntHeader."Order No.");
+        if lIntLine.FindSet(true) then
+            repeat
+                lIntLine."Error In Line" := false;
+                lIntLine.Modify();
+            until lIntLine.Next = 0;
+        lIntErrorLine.SetRange("Integration Type", lIntErrorline."Integration Type"::Sales);
+        lIntErrorline.SetRange("Integration File No.", pIntHeader."File No.");
+        lIntErrorLine.SetRange("Integration Order No.", pIntHeader."Order No.");
+        if lIntErrorline.FindSet(True) then
+            lIntErrorline.DeleteAll;
+    end;
+
+    procedure CheckCreateSalesIntegrationOrders()
+
+    var
+
+        lIntHeader: Record "Sales Integration Header";
+        lIntLine: Record "Sales Integration Line";
+        lErrorInOrder: Boolean;
+        lGenJournalLine: Record "Gen. Journal Line";
+        lLineNo: Integer;
+        lItem: Record Item;
+    begin
+        clear(IntHeader);
+        lIntHeader.SetRange("Error In Order", false);
+        lIntHeader.Setrange("Order Processed", false);
+        if lIntHeader.FindSet(True) then
+            repeat
+
+                //Check Header and Lines for errors
+                lErrorInOrder := CheckHeader(lIntHeader);
+
+                lIntLine.SetRange("File No.", lIntHeader."File No.");
+                lIntLine.SetRange("Order No.", lIntHeader."Order No.");
+                if lIntLine.FindSet(true) then
+                    repeat
+                        lErrorInOrder := CheckLine(lIntLine);
+                    until lIntLine.Next = 0 else begin
+                    CreateError(lIntHeader, true, 'There is no lines in this order');
+                    lErrorInOrder := true;
+                end;
+
+                //Create Sales Journal
+                if not lErrorInOrder then begin
+                    Clear(lGenJournalLine);
+                    lGenJournalLine.SetRange("Journal Template Name", 'SALES');
+                    lGenJournalLine.SetRange("Journal Batch Name", 'SALES_INT');
+                    if lGenJournalLine.FindLast then
+                        lLineNo := lGenJournalLine."Line No."
+                    else
+                        lLineNo := 0;
+
+                    if lIntLine.FindSet(false) then
+                        repeat
+                            Clear(lGenJournalLine);
+                            lGenJournalLine.Validate("Journal Template Name", 'SALES');
+                            lGenJournalLine.Validate("Journal Batch Name", 'SALES_INT');
+                            lLineNo += 10000;
+                            lGenJournalLine.Validate("Line No.", lLineNo);
+                            if lIntLine."Line Amount" > 0 then
+                                lGenJournalLine.Validate("Document Type", lGenJournalLine."Document Type"::Invoice)
+                            else begin
+                                lGenJournalLine.Validate("Document Type", lGenJournalLine."Document Type"::"Credit Memo");
+
+                            end;
+                            lGenJournalLine.Validate("Document No.", lIntHeader."Int. Invoice No.");
+                            lGenJournalLine.Insert(True);
+                            lGenJournalLine.Validate("Posting Date", lIntHeader."Order Date");
+                            lGenJournalLine.Validate("Account Type", lGenJournalLine."Account Type"::Customer);
+                            lGenJournalLine.Validate("Account No.", lIntHeader."Sell-To Customer No.");
+                            lItem.Get(lIntLine."Item No.");
+                            lGenJournalLine.Validate(Description, lIntLine."Item No." + ' ' + lItem.Description + ' ' + Format(lIntLine."Item Quantity"));
+                            lGenJournalLine.Validate(Amount, lIntLine."Line Amount");
+
+
+                            lGenJournalLine.Validate("Bal. Account No.", '13100');
+                            lGenJournalLine.Modify(true);
+                        until lIntLine.Next = 0;
+                    lIntHeader."Order Processed" := true;
+                    lIntHeader."Order Processed Date Time" := CurrentDateTime;
+                    lIntHeader."Sales Document No." := 'SalesJournal';
+                    lIntHeader.Modify;
+                end;
+            until lIntHeader.Next = 0;
+
+    end;
+
+
+    procedure CheckHeader(var pIntHeader: Record "Sales Integration Header") rErrorinOrder: Boolean
+    var
+        lCustomer: Record Customer;
+        lLocation: Record Location;
+
+    begin
+        if not lCustomer.Get(pIntHeader."Sell-To Customer No.") then begin
+            CreateError(pIntHeader, false, StrSubstNo('Sell-to Customer %1 Does not exist', pIntHeader."Sell-To Customer No."));
+            rErrorinOrder := true;
+        end else begin
+            if lCustomer.Blocked <> lCustomer.Blocked::" " then begin
+                CreateError(pIntHeader, false, StrSubstNo('Customer %1 is Blocked with %2', pIntHeader."Sell-To Customer No.", lCustomer.Blocked));
+                rErrorinOrder := true;
+            end;
+        end;
+        if not lLocation.Get(pIntHeader."Location Code") then begin
+            CreateError(pIntHeader, false, StrSubstNo('Location %1 Does not exist', pIntHeader."Location Code"));
+            rErrorinOrder := true;
+        end;
+    end;
+
+    procedure CheckLine(var pIntLIne: Record "Sales Integration Line") rErrorinLine: Boolean
+    var
+        lItem: Record Item;
+
+    begin
+        if not lItem.Get(pIntLine."Item No.") then begin
+            CreateError(pIntLine, false, StrSubstNo('Item No. %1 does not exist', pIntLine."Item No."));
+            rErrorinLine := true;
+        end else begin
+            if lItem.Blocked then begin
+                CreateError(pIntLine, false, StrSubstNo('Item No. %1 is blocked', pIntLine."Item No."));
+                rErrorinLine := true;
+            end;
+        end;
+    end;
+
+    procedure CreateError(pIntHeader: Record "Sales Integration Header"; pCritical: Boolean; pDescription: Text[200])
+    var
+        IntError2: Record "Integration Error Line";
+        IntError: Record "Integration Error Line";
+        lIntHeader2: Record "Sales Integration Header";
+    Begin
+        Clear(IntError);
+        IntError."Integration Type" := IntError."Integration Type"::Sales;
+        IntError."Integration File No." := pIntHeader."File No.";
+        IntError."Integration Order No." := pIntHeader."Order No.";
+        IntError."Line No." := 0;
+
+        IntError2.SetRange("Integration Type", IntError."Integration Type");
+        IntError2.SetRange("Integration File No.", IntError."Integration File No.");
+        IntError2.SetRange("Integration Order No.", IntError."Integration Order No.");
+        if IntError2.FindLast then
+            IntError."Error Line No." := IntError2."Error Line No." + 1
+        else
+            IntError."Error Line No." := 1;
+
+        IntError."Critical Error" := pCritical;
+        IntError."Error Description" := pDescription;
+        IntError."Created DateTime" := CurrentDateTime;
+        IntError.Insert;
+
+        lIntHeader2.Get(pIntHeader."File No.", pIntHeader."Order No.");
+        lIntHeader2."Error In Order" := true;
+        lIntHeader2."Critical Error In Order" := pCritical;
+        lIntHeader2.Modify;
+    End;
+
+    procedure CreateError(pIntLine: Record "Sales Integration Line"; pCritical: Boolean; pDescription: Text[200])
+    var
+        IntError2: Record "Integration Error Line";
+        IntError: Record "Integration Error Line";
+        lIntHeader: Record "Sales Integration Header";
+        lIntHeader2: Record "Sales Integration Header";
+        lIntLine2: Record "Sales Integration Line";
+    Begin
+        lIntHeader.Get(pIntLine."File No.", pIntLine."Order No.");
+        Clear(IntError);
+        IntError."Integration Type" := IntError."Integration Type"::Sales;
+        IntError."Integration File No." := lIntHeader."File No.";
+        IntError."Integration Order No." := lIntHeader."Order No.";
+        IntError."Line No." := pIntLine."Line No.";
+
+        IntError2.SetRange("Integration Type", IntError."Integration Type");
+        IntError2.SetRange("Integration File No.", IntError."Integration File No.");
+        IntError2.SetRange("Integration Order No.", IntError."Integration Order No.");
+        IntError2.SetRange("Line No.", IntError."Line No.");
+
+        if IntError2.FindLast then
+            IntError."Error Line No." := IntError2."Error Line No." + 1
+        else
+            IntError."Error Line No." := 1;
+
+        IntError."Critical Error" := pCritical;
+        IntError."Error Description" := pDescription;
+        IntError."Created DateTime" := CurrentDateTime;
+        IntError.Insert;
+
+        lIntHeader2.Get(lIntHeader."File No.", lIntHeader."Order No.");
+        lIntHeader2."Error In Order" := true;
+        lIntHeader2."Critical Error In Order" := pCritical;
+        lIntHeader2.Modify;
+
+        lIntLine2.Get(pIntLine."File No.", pIntLine."Order No.", pIntLine."Line No.");
+        lIntLine2."Critical Error In Line" := pCritical;
+        lIntLine2."Error In Line" := true;
+        lIntLine2.Modify;
+    End;
+
+}
