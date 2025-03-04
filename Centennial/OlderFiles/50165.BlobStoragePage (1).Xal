@@ -129,7 +129,7 @@ page 50165 "Blob Storage 2"
                 begin
                     ContainerName := 'filemdttest1';
                     StorageAccount := 'bctest111';
-                    SharedKey := 'JdyzEY2J87B+jBYjQS6BW8ZB+OxzQBsOdOMbNCSlKAuerWcn06go8QxlJ1emg61TP+WNSR/1Y+TT+ASt2suAhA==';
+                    SharedKey := 'temptemptemp';
                     Authorization := StorageServiceAuth.CreateSharedKey(SharedKey);
                     ABSBlob.Initialize(StorageAccount, ContainerName, Authorization);
                     Response := ABSBlob.ListBlobs(ABSContContent);

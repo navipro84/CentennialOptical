@@ -30,7 +30,7 @@ table 50021 "Integration Import"
         {
             Caption = 'Files Processed';
             FieldClass = FlowField;
-            CalcFormula = count("Integration Import File" where("Import No. " = field("Import No.")));
+            CalcFormula = count("Integration Import File" where("Import No." = field("Import No.")));
         }
         field(70; "Errors in Import"; Integer)
         {

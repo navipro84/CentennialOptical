@@ -111,7 +111,7 @@ page 50202 "ABS Container Items"
                 trigger OnAction()
                 begin
                     ImportFromADS.AuthorizeAzure(IntType::Sales);
-                    ImportFromADS.ImportFromAzure();
+                    ImportFromADS.ImportFromAzure(IntType::Sales);
                 end;
             }
             action("Test Import Log")

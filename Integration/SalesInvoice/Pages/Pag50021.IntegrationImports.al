@@ -45,6 +45,12 @@ page 50021 "Integration Imports"
                     ToolTip = 'Specifies the value of the Critical Error in Import field.', Comment = '%';
                 }
             }
+            part(IntegImportFiles; "Integ. Import Files Subform")
+            {
+                ApplicationArea = Basic, Suite;
+                SubPageLink = "Import No." = field("Import No.");
+                UpdatePropagation = Both;
+            }
         }
     }
 }

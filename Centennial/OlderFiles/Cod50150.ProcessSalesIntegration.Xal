@@ -37,8 +37,6 @@ codeunit 50150 "Process Sales Integration"
     begin
         //https://www.youtube.com/watch?v=iPvSN71JaMo
         //https://www.youtube.com/watch?v=cp91N4xFqlg
-        //SharedKey := 't03AmoKTExPqIhUGXR9kt+A7vAd+i83fPUo8eWcJ5DX6Bosj+sUObaJV/05to72njiCJeVimvb9t+AStaUVWNg==';
-        Authorization := ServiceStorageAuthorization.CreateSharedKey('t03AmoKTExPqIhUGXR9kt+A7vAd+i83fPUo8eWcJ5DX6Bosj+sUObaJV/05to72njiCJeVimvb9t+AStaUVWNg==');
 
         ContainerClient.Initialize('olegteststoageacc', Authorization);
     end;
