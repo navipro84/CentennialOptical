@@ -12,7 +12,9 @@ codeunit 50151 "Import File from ADS"
         CannotCopyErr: Label 'Cannot copy %1 to %2';
         IntegHasNoSetupErr: Label 'Integration Type %1 has no setup';
         Authorization: Interface "Storage Service Authorization";
+        FileAlreadyProcessedErr: Label 'File was already processed in Import %1';
         ABSBlob: Codeunit "ABS Blob Client";
+        CR: Char;
 
     procedure ImportFromAzure(pIntType: Enum "Integration Type"): Text
     var
@@ -24,7 +26,7 @@ codeunit 50151 "Import File from ADS"
         lErrorsFolder: Text[50];
         lLogFolder: text[50];
         lABSContContent: Record "ABS Container Content";
-        lErrorText: Text;
+        lErrorText: List of [Text];
         lIntegrationImport: Record "Integration Import";
         lIntegrationImportFile: Record "Integration Import File";
         lNewLineNo: Integer;
@@ -35,6 +37,9 @@ codeunit 50151 "Import File from ADS"
         lTotalRecordCounter: Integer;
         lFileRecordCounter: Integer;
         lTotalErrorsCounter: Integer;
+        lIntegrationImportFile2: Record "Integration Import File";
+        lSingleError: Text;
+        lBigErrorText: Text;
     begin
         lProcessedFolder := 'processed';
         lErrorsFolder := 'errors';
@@ -56,6 +61,10 @@ codeunit 50151 "Import File from ADS"
         lIntegrationImport.Insert();
         lNoOfFiles := 0;
 
+        Clear(lIntegrationImportFile2);
+        lIntegrationImportFile2.SetCurrentKey("Company Name", "File Name");
+        lIntegrationImportFile2.SetRange("Company Name", CompanyName);
+
 
         lABSContContent.SetRange("Full Name");
         lABSContContent.SetFilter("Content Type", '<>%1', 'Directory');
@@ -63,39 +72,54 @@ codeunit 50151 "Import File from ADS"
         if lABSContContent.FindSet then begin
             repeat //read each file
                 lSuccess := true;
-                lErrorText := '';
+                Clear(lErrorText);
                 lNoOfFiles += 1;
                 lFileErrorCounter := 0;
                 lCriticalErrorinFile := false;
                 lFileRecordCounter := 0;
 
-                Clear(lInStrm);
-                lResponse := ABSBlob.GetBlobAsStream(lABSContContent.Name, lInStrm);
-                if lResponse.IsSuccessful() then begin
-                    Clear(lCSVBuffer);
-                    lCSVBuffer.DeleteAll();
-                    lCSVBuffer.LoadDataFromStream(lInStrm, ',');
+                //Check is file with this name was already processed
+                lIntegrationImportFile2.SetRange("File Name", lABSContContent.Name);
+                if lIntegrationImportFile2.FindFirst() then begin
+                    lSuccess := false;
+                    lErrorText.Add(StrSubstNo(FileAlreadyProcessedErr, lIntegrationImportFile2."Import No."));
+                end;
 
-                    if lCSVBuffer.GetNumberOfLines() > 0 then begin
-                        lCSVBuffer.FindSet(False);
-                        lFileRecordCounter := lCSVBuffer.GetNumberOfLines(); //temp until the actual implementation is done
-                        repeat
-                        //TODO - PUT IMPORT CODE HERE!!!!!
+                if lSuccess then begin
+                    Clear(lInStrm);
+                    lResponse := ABSBlob.GetBlobAsStream(lABSContContent.Name, lInStrm);
+                    if lResponse.IsSuccessful() then begin
+                        Clear(lCSVBuffer);
+                        lCSVBuffer.DeleteAll();
+                        lCSVBuffer.LoadDataFromStream(lInStrm, ',');
 
-                        //lFileRecordsCounter := // 
-                        //lFileErrorCounter := //
+                        if lCSVBuffer.GetNumberOfLines() > 0 then begin
+                            lCSVBuffer.FindSet(False);
+                            lFileRecordCounter := lCSVBuffer.GetNumberOfLines(); //temp until the actual implementation is done
+                            repeat
+                                case pIntType of
+                                    pIntType::Sales:
+                                        begin
+
+                                        end;
+                                end;
+                            //TODO - PUT IMPORT CODE HERE!!!!!
+
+                            //lFileRecordsCounter := // 
+                            //lFileErrorCounter := //
 
 
-                        until lCSVBuffer.Next = 0;
+                            until lCSVBuffer.Next = 0;
+                        end else begin
+                            lSuccess := false;
+                            lErrorText.Add(FileIsBlankErr);
+                        end;
+
+
                     end else begin
                         lSuccess := false;
-                        lErrorText := FileIsBlankErr;
+                        lErrorText.Add(lResponse.GetError());
                     end;
-
-
-                end else begin
-                    lSuccess := false;
-                    lErrorText := lResponse.GetError();
                 end;
 
                 if lSuccess then begin //move file to Processed subfolder
@@ -115,7 +139,11 @@ codeunit 50151 "Import File from ADS"
                     if not lResponse.IsSuccessful() then
                         Error(CannotCopyErr, lABSContContent.Name, lProcessedFolder + '/' + lABSContContent.Name); //Trigger runtime error to rollback the changes
                     //Create a log file with error description
-                    ABSBlob.PutBlobBlockBlobText(lLogFolder + '/' + lABSContContent.Name + '.log', lErrorText);
+                    lBigErrorText := '';
+                    CR := 13; //Carriage Return
+                    foreach lSingleError in lErrorText do
+                        lBigErrorText += lSingleError + CR;
+                    ABSBlob.PutBlobBlockBlobText(lLogFolder + '/' + lABSContContent.Name + '.log', lBigErrorText);
                     lResponse := ABSBlob.DeleteBlob(lABSContContent.Name);
                     if not lResponse.IsSuccessful() then
                         Error(CannotDeleteErr, lABSContContent.Name); //Trigger runtime error to rollback the changes
@@ -124,6 +152,7 @@ codeunit 50151 "Import File from ADS"
 
                 Clear(lIntegrationImportFile);
                 lIntegrationImportFile."Import No." := lIntegrationImport."Import No.";
+                lIntegrationImportFile."Company Name" := lIntegrationImport."Company Name";
                 lIntegrationImportFile."File No. " := lNoOfFiles;
                 lIntegrationImportFile."File Name" := lABSContContent.Name;
                 lIntegrationImportFile."File Length" := lABSContContent."Content Length";

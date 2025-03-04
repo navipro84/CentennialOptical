@@ -12,6 +12,10 @@ table 50022 "Integration Import File"
             TableRelation = "Integration Import";
             ValidateTableRelation = true;
         }
+        field(15; "Company Name"; Text[30])
+        {
+            Caption = 'Company Name';
+        }
         field(20; "File No. "; Integer)
         {
             Caption = 'File No. ';
@@ -42,6 +46,10 @@ table 50022 "Integration Import File"
         key(PK; "Import No.", "File No. ")
         {
             Clustered = true;
+        }
+        key(Key2; "Company Name", "File Name")
+        {
+
         }
     }
 }
