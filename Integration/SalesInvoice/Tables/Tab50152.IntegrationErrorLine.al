@@ -1,23 +1,28 @@
 table 50152 "Integration Error Line"
 {
     Caption = 'Integration Error Line';
+    DataPerCompany = false;
     DataClassification = CustomerContent;
     LookupPageId = "Integration Error Lines";
     DrillDownPageId = "Integration Error Lines";
 
     fields
     {
-        field(10; "Integration Type"; Enum "Integration Type")
+        field(10; "Integration Import No."; Integer)
         {
-            Caption = 'Integration Type';
+            Caption = 'Integration Import No.';
         }
-        field(20; "Integration File No."; Code[20])
+        field(20; "Integration File No."; Integer)
         {
             Caption = 'Integration File No.';
         }
         field(30; "Integration Order No."; Code[20])
         {
             Caption = 'Integration Order No.';
+        }
+        field(35; "Integration Type"; Enum "Integration Type")
+        {
+            Caption = 'Integration Type';
         }
         field(40; "Line No."; Integer)
         {
@@ -43,7 +48,7 @@ table 50152 "Integration Error Line"
     }
     keys
     {
-        key(PK; "Integration Type", "Integration File No.", "Integration Order No.", "Line No.", "Error Line No.")
+        key(PK; "Integration Import No.", "Integration File No.", "Integration Order No.", "Line No.", "Error Line No.")
         {
             Clustered = true;
         }

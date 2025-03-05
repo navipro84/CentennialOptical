@@ -40,6 +40,9 @@ codeunit 50151 "Import File from ADS"
         lIntegrationImportFile2: Record "Integration Import File";
         lSingleError: Text;
         lBigErrorText: Text;
+        lImportSalesData: Codeunit "Import Sales Data";
+        lIntegErrorLine: Record "Integration Error Line";
+        i: Integer;
     begin
         lProcessedFolder := 'processed';
         lErrorsFolder := 'errors';
@@ -85,6 +88,14 @@ codeunit 50151 "Import File from ADS"
                     lErrorText.Add(StrSubstNo(FileAlreadyProcessedErr, lIntegrationImportFile2."Import No."));
                 end;
 
+                Clear(lIntegrationImportFile);
+                lIntegrationImportFile."Import No." := lIntegrationImport."Import No.";
+                lIntegrationImportFile."Company Name" := lIntegrationImport."Company Name";
+                lIntegrationImportFile."File No. " := lNoOfFiles;
+                lIntegrationImportFile."File Name" := lABSContContent.Name;
+                lIntegrationImportFile."File Length" := lABSContContent."Content Length";
+                lIntegrationImportFile.Insert;
+
                 if lSuccess then begin
                     Clear(lInStrm);
                     lResponse := ABSBlob.GetBlobAsStream(lABSContContent.Name, lInStrm);
@@ -100,13 +111,9 @@ codeunit 50151 "Import File from ADS"
                                 case pIntType of
                                     pIntType::Sales:
                                         begin
-
+                                            lImportSalesData.StartImport(lCSVBuffer, lIntegrationImportFile, lFileRecordCounter, lFileErrorCounter, lErrorText);
                                         end;
                                 end;
-                            //TODO - PUT IMPORT CODE HERE!!!!!
-
-                            //lFileRecordsCounter := // 
-                            //lFileErrorCounter := //
 
 
                             until lCSVBuffer.Next = 0;
@@ -141,8 +148,22 @@ codeunit 50151 "Import File from ADS"
                     //Create a log file with error description
                     lBigErrorText := '';
                     CR := 13; //Carriage Return
-                    foreach lSingleError in lErrorText do
+                    i := 0;
+                    foreach lSingleError in lErrorText do begin
+                        i += 1;
                         lBigErrorText += lSingleError + CR;
+                        Clear(lIntegErrorLine);
+                        lIntegErrorLine."Integration Import No." := lIntegrationImport."Import No.";
+                        lIntegErrorLine."Integration File No." := lIntegrationImportFile."File No. ";
+                        lIntegErrorLine."Integration Order No." := ''; //Order was not created, it is a critical error
+                        lIntegErrorLine."Line No." := 0;
+                        lIntegErrorLine."Error Line No." := i;
+                        lIntegErrorLine."Integration Type" := lIntegrationImport."Integration Type";
+                        lIntegErrorLine."Error Description" := lSingleError;
+                        lIntegErrorLine."Critical Error" := true;
+                        lIntegErrorLine."Created DateTime" := CurrentDateTime;
+                        lIntegErrorLine.Insert;
+                    end;
                     ABSBlob.PutBlobBlockBlobText(lLogFolder + '/' + lABSContContent.Name + '.log', lBigErrorText);
                     lResponse := ABSBlob.DeleteBlob(lABSContContent.Name);
                     if not lResponse.IsSuccessful() then
@@ -150,16 +171,10 @@ codeunit 50151 "Import File from ADS"
                     lCriticalErrorinFile := true;
                 end;
 
-                Clear(lIntegrationImportFile);
-                lIntegrationImportFile."Import No." := lIntegrationImport."Import No.";
-                lIntegrationImportFile."Company Name" := lIntegrationImport."Company Name";
-                lIntegrationImportFile."File No. " := lNoOfFiles;
-                lIntegrationImportFile."File Name" := lABSContContent.Name;
-                lIntegrationImportFile."File Length" := lABSContContent."Content Length";
                 lIntegrationImportFile."Error in File" := lFileErrorCounter;
                 lIntegrationImportFile."Critical Error in File" := lCriticalErrorinFile;
                 lIntegrationImportFile."Records Processed" := lFileRecordCounter;
-                lIntegrationImportFile.Insert;
+                lIntegrationImportFile.Modify;
 
                 lTotalRecordCounter += lFileRecordCounter;
                 lTotalErrorsCounter += lFileErrorCounter;
