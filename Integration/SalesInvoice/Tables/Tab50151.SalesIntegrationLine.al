@@ -74,6 +74,10 @@ table 50151 "Sales Integration Line"
         {
             Caption = 'CityTax Amount';
         }
+        field(140; Taxable; Boolean)
+        {
+            Caption = 'Taxable';
+        }
         field(200; "Sales Document Type"; Enum "Sales Document Type")
         {
             Caption = 'Sales Document Type';

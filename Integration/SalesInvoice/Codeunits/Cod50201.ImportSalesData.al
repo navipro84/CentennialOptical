@@ -1,15 +1,16 @@
 codeunit 50201 "Import Sales Data"
 {
 
-    procedure StartImport(pCSVBuffer: Record "CSV Buffer"; pIntegrationImportFile: record "Integration Import File"; var pRecordsCounter: Integer; var pErrorsCounter: Integer; var pCriticalErrorText: List of [Text])
+    procedure StartImport(var pCSVBuffer: Record "CSV Buffer" temporary; pIntegrationImportFile: record "Integration Import File"; var pFileLineCounter: Integer;
+                            var pErrorsCounter: Integer; var pCriticalErrorText: List of [Text]; var pFileOrderCounter: Integer)
     begin
         SetColumnNumbers();
         if not CheckForCriticalErrors(pCSVBuffer, pCriticalErrorText) then //if critical error in file
             exit;
-        CreateImportDocuments(pCSVBuffer, pIntegrationImportFile, pRecordsCounter, pErrorsCounter);
+        CreateImportDocuments(pCSVBuffer, pIntegrationImportFile, pFileLineCounter, pErrorsCounter, pFileOrderCounter);
     end;
 
-    procedure CheckForCriticalErrors(pCSVBuffer: Record "CSV Buffer"; var pCriticalErrorText: List of [Text]): Boolean
+    procedure CheckForCriticalErrors(var pCSVBuffer: Record "CSV Buffer" temporary; var pCriticalErrorText: List of [Text]): Boolean
     var
         lDateVar: Date;
         lDecimalVar: Decimal;
@@ -37,19 +38,22 @@ codeunit 50201 "Import Sales Data"
                             pCriticalErrorText.Add(StrSubstNo(FieldValueErr, pCSVBuffer."Line No.", pCSVBuffer."Field No.", 'Date (MM/DD/YYYY)', pCSVBuffer.Value));
                         end;
                     end;
-                    if pCSVBuffer."Field No." in [ColumnTotalMerchAmount, ColumnTotalTaxAmount, ColumnTotalMiscAmount, ColumnTotalFreightAmount,
+
+                    if (pCSVBuffer."Field No." in [ColumnTotalMerchAmount, ColumnTotalTaxAmount, ColumnTotalMiscAmount, ColumnTotalFreightAmount,
                                                     ColumnTotalCost, ColumnMiscChargeAmount1, ColumnMiscChargeAmount2, ColumnMiscChargeAmount3,
                                                     ColumnTotalStateTaxAmount, ColumnTotalCountyTaxAmount, ColumnTotalCityTaxAmount,
                                                     ColumnTotalSchoolTaxAmount, ColumnTotalOtherAmount, ColumnQtyOrdered, ColumnQtyShipped,
                                                     ColumnLineAmount, ColumnUnitCost, ColumnLineTotalCost, ColumnLineStateTaxAmount,
-                                                    ColumnLineCountyTax, ColumnLineCityTax] then begin
+                                                    ColumnLineCountyTaxAmount, ColumnLineCityTaxAmount]) and (pCSVBuffer.Value <> '') then begin
                         if not Evaluate(lDecimalVar, pCSVBuffer.Value) then begin
                             pCriticalErrorText.Add(StrSubstNo(FieldValueErr, pCSVBuffer."Line No.", pCSVBuffer."Field No.", 'Decimal', pCSVBuffer.Value));
                         end;
                     end;
-                    if pCSVBuffer."Field No." = ColumnTaxable then begin
+
+
+                    if (pCSVBuffer."Field No." = ColumnTaxable) and (pCSVBuffer.Value <> '') then begin
                         if (pCSVBuffer.Value <> 'Y') and (pCSVBuffer.Value <> 'N') then begin
-                            pCriticalErrorText.Add(StrSubstNo(FieldValueErr, pCSVBuffer."Line No.", pCSVBuffer."Field No.", 'Y or N', pCSVBuffer.Value));
+                            pCriticalErrorText.Add(StrSubstNo(FieldValueErr, pCSVBuffer."Line No.", pCSVBuffer."Field No.", 'Y, N, Blank', pCSVBuffer.Value));
                         end;
                     end;
                 end;
@@ -57,7 +61,8 @@ codeunit 50201 "Import Sales Data"
         exit(pCriticalErrorText.Count = 0);
     end;
 
-    procedure CreateImportDocuments(pCSVBuffer: Record "CSV Buffer"; pIntegrationImportFile: Record "Integration Import File"; var pRecordsCounter: Integer; var pErrorsCounter: Integer)
+    procedure CreateImportDocuments(var pCSVBuffer: Record "CSV Buffer" temporary; pIntegrationImportFile: Record "Integration Import File";
+                                    var pFileLineCounter: Integer; var pErrorsCounter: Integer; var pFileOrderCounter: Integer)
     var
         lDocumentNo: Code[50];
         lStartingRow: Integer;
@@ -77,14 +82,18 @@ codeunit 50201 "Import Sales Data"
                 if pCSVBuffer.GetValue(i, ColumnInvoiceNumber) <> lDocumentNo then begin
                     //new document# -> create header
                     lDocumentNo := pCSVBuffer.GetValue(i, ColumnInvoiceNumber);
+                    pFileOrderCounter += 1;
                     Clear(lSalesIntHeader);
                     lSalesIntHeader."Import No" := pIntegrationImportFile."Import No.";
                     lSalesIntHeader."File No." := pIntegrationImportFile."File No. ";
+                    lSalesIntHeader."File Name " := pIntegrationImportFile."File Name";
                     lSalesIntHeader."Order No." := lNewOrderNo;
                     lNewOrderNo := IncStr(lNewOrderNo);
                     lSalesIntHeader."External Document No." := pCSVBuffer.GetValue(i, ColumnInvoiceNumber);
                     if CopyStr(lSalesIntHeader."External Document No.", StrLen(lSalesIntHeader."External Document No."), 1) = 'C' then //if the last letter is C -> Credit
                         lSalesIntHeader."Document Type" := lSalesIntHeader."Document Type"::Credit;
+                    if CopyStr(lSalesIntHeader."External Document No.", StrLen(lSalesIntHeader."External Document No."), 1) = 'D' then //if the last letter is D -> Debit Memo
+                        lSalesIntHeader."Document Type" := lSalesIntHeader."Document Type"::"Debit Memo";
                     CheckDate(pCSVBuffer.GetValue(i, ColumnDateShipped), lSalesIntHeader."Shipment Date");
                     lSalesIntHeader."Sell-To Customer No." := pCSVBuffer.GetValue(i, ColumnCustomerNo);
                     lSalesIntHeader."External Customer Name" := pCSVBuffer.GetValue(i, ColumnExtCustomerName);
@@ -105,29 +114,33 @@ codeunit 50201 "Import Sales Data"
                     lSalesIntHeader.Insert;
                     lLineNo := 10000;
                 end;
-                //TODO orders without lines. block below is not needed
-                Clear(lSalesIntLine);
-                lSalesIntLine."Import No." := lSalesIntHeader."Import No";
-                lSalesIntLine."File No." := lSalesIntHeader."File No.";
-                lSalesIntLine."Order No." := lSalesIntHeader."Order No.";
-                lSalesIntLine."Line No." := lLineNo;
-                lLineNo += 10000;
-                lSalesIntLine."Item No." := pCSVBuffer.GetValue(i, ColumnItemNo);
-                lSalesIntLine."Item Description" := pCSVBuffer.GetValue(i, ColumnItemDescription1);
-                lSalesIntLine."Item Description 2" := pCSVBuffer.GetValue(i, ColumnItemDescription2);
-                lSalesIntLine."Customer Item No." := pCSVBuffer.GetValue(i, ColumnCustomerItemNo);
-                lSalesIntLine."Unit of Measure" := pCSVBuffer.GetValue(i, ColumnUnitOfMeasure);
-                Evaluate(lSalesIntLine."Quantity Ordered", pCSVBuffer.GetValue(i, ColumnQtyOrdered));
-                Evaluate(lSalesIntLine."Quantity Shipped", pCSVBuffer.GetValue(i, ColumnQtyShipped));
-                Evaluate(lSalesIntLine."Line Amount", pCSVBuffer.GetValue(i, ColumnLineAmount));
-                Evaluate(lSalesIntLine."Unit Cost", pCSVBuffer.GetValue(i, ColumnUnitCost));
-                Evaluate(lSalesIntLine."Line Cost", pCSVBuffer.GetValue(i, ColumnLineTotalCost));
-                Evaluate(lSalesIntLine."State Tax Amount", pCSVBuffer.GetValue(i, ColumnLineStateTaxAmount));
-                Evaluate(lSalesIntLine."County Tax Amount", pCSVBuffer.GetValue(i, ColumnLineCountyTaxAmount));
-                Evaluate(lSalesIntLine."City Tax Amount", pCSVBuffer.GetValue(i, ColumnLineCityTaxAmount));
-                lSalesIntLine.Insert;
+                if pCSVBuffer.GetValue(i, ColumnInvoiceLineKey) <> '' then begin //check is the invoice line key is blank
+                    Clear(lSalesIntLine);
+                    lSalesIntLine."Import No." := lSalesIntHeader."Import No";
+                    lSalesIntLine."File No." := lSalesIntHeader."File No.";
+                    lSalesIntLine."Order No." := lSalesIntHeader."Order No.";
+                    lSalesIntLine."Line No." := lLineNo;
+                    lLineNo += 10000;
+                    lSalesIntLine."Item No." := pCSVBuffer.GetValue(i, ColumnItemNo);
+                    lSalesIntLine."Item Description" := pCSVBuffer.GetValue(i, ColumnItemDescription1);
+                    lSalesIntLine."Item Description 2" := pCSVBuffer.GetValue(i, ColumnItemDescription2);
+                    lSalesIntLine."Customer Item No." := pCSVBuffer.GetValue(i, ColumnCustomerItemNo);
+                    lSalesIntLine."Unit of Measure" := pCSVBuffer.GetValue(i, ColumnUnitOfMeasure);
+                    Evaluate(lSalesIntLine."Quantity Ordered", pCSVBuffer.GetValue(i, ColumnQtyOrdered));
+                    Evaluate(lSalesIntLine."Quantity Shipped", pCSVBuffer.GetValue(i, ColumnQtyShipped));
+                    Evaluate(lSalesIntLine."Line Amount", pCSVBuffer.GetValue(i, ColumnLineAmount));
+                    Evaluate(lSalesIntLine."Unit Cost", pCSVBuffer.GetValue(i, ColumnUnitCost));
+                    Evaluate(lSalesIntLine."Line Cost", pCSVBuffer.GetValue(i, ColumnLineTotalCost));
+                    Evaluate(lSalesIntLine."State Tax Amount", pCSVBuffer.GetValue(i, ColumnLineStateTaxAmount));
+                    Evaluate(lSalesIntLine."County Tax Amount", pCSVBuffer.GetValue(i, ColumnLineCountyTaxAmount));
+                    Evaluate(lSalesIntLine."City Tax Amount", pCSVBuffer.GetValue(i, ColumnLineCityTaxAmount));
+                    if pCSVBuffer.GetValue(i, ColumnTaxable) = 'Y' then
+                        lSalesIntLine.Taxable := true;
+                    lSalesIntLine.Insert;
+                end;
 
             end;
+        pFileLineCounter := i;
 
     end;
 
@@ -139,45 +152,46 @@ codeunit 50201 "Import Sales Data"
         lYearInt: Integer;
     begin
         //DD/MM/YYYY
-        Evaluate(lDayInt, CopyStr(pDateText, 1, 2));
-        Evaluate(lMonthInt, CopyStr(pDateText, 3, 2));
-        Evaluate(lYearInt, CopyStr(pDateText, 78, 4));
+        Evaluate(lDayInt, CopyStr(pDateText, 4, 2));
+        Evaluate(lMonthInt, CopyStr(pDateText, 1, 2));
+        Evaluate(lYearInt, CopyStr(pDateText, 7, 4));
         pDate := DMY2Date(lDayInt, lMonthInt, lYearInt);
     end;
 
     procedure SetColumnNumbers()
     begin
-        TotalColumns := 58; //number of columns expected in file
+        TotalColumns := 62; //number of columns expected in file
         HeaderRow := true; //is there a header row?
-        ColumnDocumentType := 1;
-        ColumnInvoiceNumber := 2;
-        ColumnDateShipped := 3;
-        ColumnCustomerNo := 4;
-        ColumnExtCustomerName := 5;
-        ColumnTotalMerchAmount := 6;
-        ColumnTotalTaxAmount := 7;
-        ColumnTotalOtherAmount := 8;
-        ColumnTotalMiscAmount := 9;
-        ColumnTotalFreightAmount := 10;
-        ColumnOutsideSalespersonCode := 11;
-        ColumnTaxCode := 13;
-        ColumnOriginalOrderInvoice := 15; //On credit memo lines, this number shows original Invoice #
-        ColumnCustomerPO := 16;
-        ColumnInvoiceDate := 17; //Posting Date
-        ColumnDueDate := 18;
-        ColumnTotalCost := 21;
-        ColumnPaymentTermsCode := 22;
-        ColumnMiscChargeCode1 := 25;
-        ColumnMiscChargeCode2 := 26;
-        ColumnMiscChargeCode3 := 27;
-        ColumnMiscChargeAmount1 := 28;
-        ColumnMiscChargeAmount2 := 29;
-        ColumnMiscChargeAmount3 := 30;
-        ColumnTotalStateTaxAmount := 33;
-        ColumnTotalCountyTaxAmount := 34;
-        ColumnTotalCityTaxAmount := 35;
-        ColumnTotalSchoolTaxAmount := 36;
-        ColumnTotalOtherTaxAmount := 37;
+        //ColumnDocumentType := 0;
+        ColumnInvoiceNumber := 1;
+        ColumnDateShipped := 2;
+        ColumnCustomerNo := 3;
+        ColumnExtCustomerName := 4;
+        ColumnTotalMerchAmount := 5;
+        ColumnTotalTaxAmount := 6;
+        ColumnTotalOtherAmount := 7;
+        ColumnTotalMiscAmount := 8;
+        ColumnTotalFreightAmount := 9;
+        ColumnOutsideSalespersonCode := 10;
+        ColumnTaxCode := 12;
+        ColumnOriginalOrderInvoice := 14; //On credit memo lines, this number shows original Invoice #
+        ColumnCustomerPO := 15;
+        ColumnInvoiceDate := 16; //Posting Date
+        ColumnDueDate := 17;
+        ColumnTotalCost := 20;
+        ColumnPaymentTermsCode := 21;
+        ColumnMiscChargeCode1 := 24;
+        ColumnMiscChargeCode2 := 25;
+        ColumnMiscChargeCode3 := 26;
+        ColumnMiscChargeAmount1 := 27;
+        ColumnMiscChargeAmount2 := 28;
+        ColumnMiscChargeAmount3 := 29;
+        ColumnTotalStateTaxAmount := 32;
+        ColumnTotalCountyTaxAmount := 33;
+        ColumnTotalCityTaxAmount := 34;
+        ColumnTotalSchoolTaxAmount := 35;
+        ColumnTotalOtherTaxAmount := 36;
+        ColumnInvoiceLineKey := 39;
         ColumnItemNo := 40;
         ColumnItemDescription1 := 41;
         ColumnItemDescription2 := 42;
@@ -189,9 +203,9 @@ codeunit 50201 "Import Sales Data"
         ColumnUnitCost := 49;
         ColumnTaxable := 51;
         ColumnLineTotalCost := 52;
-        ColumnLineStateTaxAmount := 56;
-        ColumnLineCountyTaxAmount := 57;
-        ColumnLineCityTaxAmount := 58;
+        ColumnLineStateTaxAmount := 58;
+        ColumnLineCountyTaxAmount := 59;
+        ColumnLineCityTaxAmount := 60;
     end;
 
     var
@@ -242,4 +256,5 @@ codeunit 50201 "Import Sales Data"
         FieldValueErr: Label 'Line %1, Field %2 error: Expected %3, received %4';
         ColumnCustomerItemNo: Integer;
         ColumnUnitOfMeasure: Integer;
+        ColumnInvoiceLineKey: Integer;
 }

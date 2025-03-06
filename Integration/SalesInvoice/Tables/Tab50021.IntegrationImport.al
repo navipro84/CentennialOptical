@@ -22,9 +22,17 @@ table 50021 "Integration Import"
         {
             Caption = 'Processed Date Time';
         }
-        field(50; "Records Imported"; Integer)
+        field(50; "File Lines Imported"; Integer)
         {
-            Caption = 'Records Imported';
+            Caption = 'File Lines Imported';
+            FieldClass = FlowField;
+            CalcFormula = Sum("Integration Import File"."File Lines Imported" where("Import No." = field("Import No.")));
+        }
+        field(52; "File Orders Imported"; Integer)
+        {
+            Caption = 'File Lines Imported';
+            FieldClass = FlowField;
+            CalcFormula = Sum("Integration Import File"."File Orders Imported" where("Import No." = field("Import No.")));
         }
         field(60; "Files Processed"; Integer)
         {
@@ -32,14 +40,20 @@ table 50021 "Integration Import"
             FieldClass = FlowField;
             CalcFormula = count("Integration Import File" where("Import No." = field("Import No.")));
         }
+        field(62; "Files in Import"; Boolean)
+        {
+            Caption = 'Files Processed';
+
+        }
         field(70; "Errors in Import"; Integer)
         {
             Caption = 'Errors in Import';
         }
-        field(80; "Critical Error in Import"; Integer)
+        field(80; "Critical Error in Import"; Boolean)
         {
-            Caption = 'Critical Error in Import';
-
+            Caption = 'Critical Errors in Import';
+            FieldClass = FlowField;
+            CalcFormula = Exist("Integration Import File" where("Import No." = field("Import No."), "Critical Error in File" = const(true)));
         }
     }
     keys
@@ -49,4 +63,15 @@ table 50021 "Integration Import"
             Clustered = true;
         }
     }
+    trigger OnDelete()
+    var
+        IntegrationImpFile: Record "Integration Import File";
+        IntegrationErrorLine: Record "Integration Error Line";
+    begin
+        IntegrationImpFile.SetRange("Import No.", Rec."Import No.");
+        IntegrationImpFile.DeleteAll;
+        IntegrationErrorLine.SetRange("Integration Import No.", Rec."Import No.");
+        IntegrationErrorLine.DeleteAll();
+
+    end;
 }

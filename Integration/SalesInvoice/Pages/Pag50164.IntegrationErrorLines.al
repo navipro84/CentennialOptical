@@ -12,10 +12,15 @@ page 50164 "Integration Error Lines"
         {
             repeater(General)
             {
+                field("Integration Import No."; Rec."Integration Import No.")
+                {
+                    ToolTip = 'Specifies the value of the Integration Import No. field.', Comment = '%';
+                }
                 field("Integration Type"; Rec."Integration Type")
                 {
                     ToolTip = 'Specifies the value of the Integration Type field.', Comment = '%';
                 }
+
                 field("Integration File No."; Rec."Integration File No.")
                 {
                     ToolTip = 'Specifies the value of the Integration File No. field.', Comment = '%';

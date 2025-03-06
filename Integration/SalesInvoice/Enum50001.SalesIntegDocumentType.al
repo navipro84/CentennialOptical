@@ -10,4 +10,8 @@ enum 50001 "Sales Integ. Document Type"
     {
         Caption = 'Credit';
     }
+    value(2; "Debit Memo")
+    {
+        Caption = 'Debit Memo';
+    }
 }

@@ -20,7 +20,7 @@ codeunit 50151 "Import File from ADS"
     var
         lResponse: Codeunit "ABS Operation Response";
         lInStrm: InStream;
-        lCSVBuffer: Record "CSV Buffer";
+        lCSVBuffer: Record "CSV Buffer" temporary;
         lSuccess: Boolean;
         lProcessedFolder: Text[50];
         lErrorsFolder: Text[50];
@@ -35,7 +35,8 @@ codeunit 50151 "Import File from ADS"
         lCriticalErrorinFile: Boolean;
         lCriticalErrorinImport: Integer;
         lTotalRecordCounter: Integer;
-        lFileRecordCounter: Integer;
+        lFileLineCounter: Integer;
+        lFileOrderCounter: Integer;
         lTotalErrorsCounter: Integer;
         lIntegrationImportFile2: Record "Integration Import File";
         lSingleError: Text;
@@ -43,6 +44,7 @@ codeunit 50151 "Import File from ADS"
         lImportSalesData: Codeunit "Import Sales Data";
         lIntegErrorLine: Record "Integration Error Line";
         i: Integer;
+        lTotalOrderCounter: Integer;
     begin
         lProcessedFolder := 'processed';
         lErrorsFolder := 'errors';
@@ -79,7 +81,8 @@ codeunit 50151 "Import File from ADS"
                 lNoOfFiles += 1;
                 lFileErrorCounter := 0;
                 lCriticalErrorinFile := false;
-                lFileRecordCounter := 0;
+                lFileLineCounter := 0;
+                lFileOrderCounter := 0;
 
                 //Check is file with this name was already processed
                 lIntegrationImportFile2.SetRange("File Name", lABSContContent.Name);
@@ -105,18 +108,12 @@ codeunit 50151 "Import File from ADS"
                         lCSVBuffer.LoadDataFromStream(lInStrm, ',');
 
                         if lCSVBuffer.GetNumberOfLines() > 0 then begin
-                            lCSVBuffer.FindSet(False);
-                            lFileRecordCounter := lCSVBuffer.GetNumberOfLines(); //temp until the actual implementation is done
-                            repeat
-                                case pIntType of
-                                    pIntType::Sales:
-                                        begin
-                                            lImportSalesData.StartImport(lCSVBuffer, lIntegrationImportFile, lFileRecordCounter, lFileErrorCounter, lErrorText);
-                                        end;
-                                end;
-
-
-                            until lCSVBuffer.Next = 0;
+                            case pIntType of
+                                pIntType::Sales:
+                                    begin
+                                        lImportSalesData.StartImport(lCSVBuffer, lIntegrationImportFile, lFileLineCounter, lFileErrorCounter, lErrorText, lFileOrderCounter);
+                                    end;
+                            end;
                         end else begin
                             lSuccess := false;
                             lErrorText.Add(FileIsBlankErr);
@@ -128,6 +125,9 @@ codeunit 50151 "Import File from ADS"
                         lErrorText.Add(lResponse.GetError());
                     end;
                 end;
+
+                if lErrorText.Count > 0 then
+                    lSuccess := false;
 
                 if lSuccess then begin //move file to Processed subfolder
                     lResponse := ABSBlob.CopyBlob(lProcessedFolder + '/' + lABSContContent.Name, lABSContContent.Name);
@@ -171,13 +171,12 @@ codeunit 50151 "Import File from ADS"
                     lCriticalErrorinFile := true;
                 end;
 
-                lIntegrationImportFile."Error in File" := lFileErrorCounter;
+                lIntegrationImportFile."Errors in File" := lFileErrorCounter;
                 lIntegrationImportFile."Critical Error in File" := lCriticalErrorinFile;
-                lIntegrationImportFile."Records Processed" := lFileRecordCounter;
-                lIntegrationImportFile.Modify;
+                lIntegrationImportFile."File Lines Imported" := lFileLineCounter;
+                lIntegrationImportFile."File Orders Imported" := lFileOrderCounter;
 
-                lTotalRecordCounter += lFileRecordCounter;
-                lTotalErrorsCounter += lFileErrorCounter;
+                lIntegrationImportFile.Modify;
 
                 if lIntegrationImportFile."Critical Error in File" then
                     lCriticalErrorinImport += 1;
@@ -185,10 +184,11 @@ codeunit 50151 "Import File from ADS"
                 Commit; //Commit after every file import
             until lABSContContent.Next = 0;
         end;
+        lIntegrationImport."Files in Import" := lNoOfFiles > 0;
+        lIntegrationImport."Processed Date Time" := CurrentDateTime;
         lIntegrationImport."Files Processed" := lNoOfFiles;
-        lIntegrationImport."Critical Error in Import" := lCriticalErrorinImport;
-        lIntegrationImport."Records Imported" := lTotalRecordCounter;
         lIntegrationImport."Errors in Import" := lTotalErrorsCounter;
+
         lIntegrationImport.Modify;
     end;
 
