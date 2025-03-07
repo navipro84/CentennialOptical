@@ -12,7 +12,7 @@ page 50161 "Sales Integration Orders"
         {
             repeater(General)
             {
-                field("Import No"; Rec."Import No")
+                field("Import No"; Rec."Import No.")
                 {
                     ToolTip = 'Specifies the value of the Import No. field.', Comment = '%';
                     Caption = 'Import No.';
@@ -136,7 +136,7 @@ page 50161 "Sales Integration Orders"
             part(SalesIntLines; "Sales Integration Line Subform")
             {
                 ApplicationArea = Basic, Suite;
-                SubPageLink = "Import No." = field("Import No"), "File No." = field("File No."), "Order No." = field("Order No.");
+                SubPageLink = "Import No." = field("Import No."), "File No." = field("File No."), "Order No." = field("Order No.");
                 UpdatePropagation = Both;
             }
         }

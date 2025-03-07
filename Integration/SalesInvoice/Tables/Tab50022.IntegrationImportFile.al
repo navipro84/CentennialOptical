@@ -16,9 +16,9 @@ table 50022 "Integration Import File"
         {
             Caption = 'Company Name';
         }
-        field(20; "File No. "; Integer)
+        field(20; "File No."; Integer)
         {
-            Caption = 'File No. ';
+            Caption = 'File No.';
         }
         field(30; "File Name"; Text[200])
         {
@@ -40,7 +40,7 @@ table 50022 "Integration Import File"
         {
             Caption = 'Critical Errors in File';
             FieldClass = FlowField;
-            CalcFormula = Count("Integration Error Line" where("Integration Import No." = field("Import No."), "Integration File No." = field("File No. "),
+            CalcFormula = Count("Integration Error Line" where("Integration Import No." = field("Import No."), "Integration File No." = field("File No."),
                                                                     "Integration Order No." = const('')));
         }
         field(70; "File Lines Imported"; Integer)
@@ -54,7 +54,7 @@ table 50022 "Integration Import File"
     }
     keys
     {
-        key(PK; "Import No.", "File No. ")
+        key(PK; "Import No.", "File No.")
         {
             Clustered = true;
         }

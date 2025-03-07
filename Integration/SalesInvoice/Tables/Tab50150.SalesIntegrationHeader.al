@@ -7,7 +7,7 @@ table 50150 "Sales Integration Header"
 
     fields
     {
-        field(5; "Import No"; Integer)
+        field(5; "Import No."; Integer)
         {
             Caption = 'File No.';
         }
@@ -138,7 +138,7 @@ table 50150 "Sales Integration Header"
         {
             FieldClass = FlowField;
             CalcFormula = Count("Integration Error Line"
-                                where("Integration Import No." = field("Import No"),
+                                where("Integration Import No." = field("Import No."),
                                     "Integration File No." = field("File No."),
                                     "Integration Order No." = field("Order No.")));
         }
@@ -146,10 +146,12 @@ table 50150 "Sales Integration Header"
     }
     keys
     {
-        key(PK; "Import No", "File No.", "Order No.")
+        key(PK; "Import No.", "File No.", "Order No.")
         {
             Clustered = true;
         }
+        key(Key01; "Order Processed", "Error In Order")
+        { }
     }
     trigger OnDelete()
     var
@@ -158,13 +160,13 @@ table 50150 "Sales Integration Header"
 
     begin
         Clear(IntLine);
-        IntLine.SetRange("Import No.", rec."Import No");
+        IntLine.SetRange("Import No.", rec."Import No.");
         IntLine.SetRange("File No.", rec."File No.");
         IntLine.SetRange("Order No.", Rec."Order No.");
         IntLine.DeleteAll();
 
         Clear(lIntErrorLine);
-        lIntErrorLine.SetRange("Integration Import No.", rec."Import No");
+        lIntErrorLine.SetRange("Integration Import No.", rec."Import No.");
         lIntErrorLine.SetRange("Integration File No.", rec."File No.");
         lIntErrorLine.SetRange("Integration Order No.", Rec."Order No.");
         lIntErrorLine.DeleteAll;

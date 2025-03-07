@@ -94,7 +94,7 @@ codeunit 50151 "Import File from ADS"
                 Clear(lIntegrationImportFile);
                 lIntegrationImportFile."Import No." := lIntegrationImport."Import No.";
                 lIntegrationImportFile."Company Name" := lIntegrationImport."Company Name";
-                lIntegrationImportFile."File No. " := lNoOfFiles;
+                lIntegrationImportFile."File No." := lNoOfFiles;
                 lIntegrationImportFile."File Name" := lABSContContent.Name;
                 lIntegrationImportFile."File Length" := lABSContContent."Content Length";
                 lIntegrationImportFile.Insert;
@@ -154,7 +154,7 @@ codeunit 50151 "Import File from ADS"
                         lBigErrorText += lSingleError + CR;
                         Clear(lIntegErrorLine);
                         lIntegErrorLine."Integration Import No." := lIntegrationImport."Import No.";
-                        lIntegErrorLine."Integration File No." := lIntegrationImportFile."File No. ";
+                        lIntegErrorLine."Integration File No." := lIntegrationImportFile."File No.";
                         lIntegErrorLine."Integration Order No." := ''; //Order was not created, it is a critical error
                         lIntegErrorLine."Line No." := 0;
                         lIntegErrorLine."Error Line No." := i;

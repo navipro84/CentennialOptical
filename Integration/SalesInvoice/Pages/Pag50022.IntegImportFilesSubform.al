@@ -74,12 +74,12 @@ page 50022 "Integ. Import Files Subform"
                         IntegImport."Integration Type"::Sales:
                             begin
                                 Clear(SalesIntHeader);
-                                SalesIntHeader.SetRange("Import No", Rec."Import No.");
-                                SalesIntHeader.SetRange("File No.", Rec."File No. ");
+                                SalesIntHeader.SetRange("Import No.", Rec."Import No.");
+                                SalesIntHeader.SetRange("File No.", Rec."File No.");
                                 if SalesIntHeader.FindSet(false) then
                                     Page.Run(0, SalesIntHeader)
                                 else
-                                    Message(NoOrdersinImportMsg, Rec."Import No.", Rec."File No. ");
+                                    Message(NoOrdersinImportMsg, Rec."Import No.", Rec."File No.");
                             end;
                     end;
                 end;

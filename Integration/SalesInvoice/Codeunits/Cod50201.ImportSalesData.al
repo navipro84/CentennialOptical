@@ -84,8 +84,8 @@ codeunit 50201 "Import Sales Data"
                     lDocumentNo := pCSVBuffer.GetValue(i, ColumnInvoiceNumber);
                     pFileOrderCounter += 1;
                     Clear(lSalesIntHeader);
-                    lSalesIntHeader."Import No" := pIntegrationImportFile."Import No.";
-                    lSalesIntHeader."File No." := pIntegrationImportFile."File No. ";
+                    lSalesIntHeader."Import No." := pIntegrationImportFile."Import No.";
+                    lSalesIntHeader."File No." := pIntegrationImportFile."File No.";
                     lSalesIntHeader."File Name " := pIntegrationImportFile."File Name";
                     lSalesIntHeader."Order No." := lNewOrderNo;
                     lNewOrderNo := IncStr(lNewOrderNo);
@@ -116,7 +116,7 @@ codeunit 50201 "Import Sales Data"
                 end;
                 if pCSVBuffer.GetValue(i, ColumnInvoiceLineKey) <> '' then begin //check is the invoice line key is blank
                     Clear(lSalesIntLine);
-                    lSalesIntLine."Import No." := lSalesIntHeader."Import No";
+                    lSalesIntLine."Import No." := lSalesIntHeader."Import No.";
                     lSalesIntLine."File No." := lSalesIntHeader."File No.";
                     lSalesIntLine."Order No." := lSalesIntHeader."Order No.";
                     lSalesIntLine."Line No." := lLineNo;

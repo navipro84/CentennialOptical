@@ -97,7 +97,7 @@ page 50021 "Integration Imports"
                         rec."Integration Type"::Sales:
                             begin
                                 Clear(SalesIntHeader);
-                                SalesIntHeader.SetRange("Import No", Rec."Import No.");
+                                SalesIntHeader.SetRange("Import No.", Rec."Import No.");
                                 if SalesIntHeader.FindSet(false) then
                                     Page.Run(0, SalesIntHeader)
                                 else
