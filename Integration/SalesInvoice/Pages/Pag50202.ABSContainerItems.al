@@ -114,13 +114,7 @@ page 50202 "ABS Container Items"
                     ImportFromADS.ImportFromAzure(IntType::Sales);
                 end;
             }
-            action("Test Import Log")
-            {
-                ApplicationArea = Basic, Suite;
-                Caption = 'Test Import Log';
-                Image = Log;
-                RunObject = Page "Test File Import Log Entries";
-            }
+
         }
     }
     var

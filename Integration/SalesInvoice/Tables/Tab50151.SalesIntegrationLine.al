@@ -72,7 +72,15 @@ table 50151 "Sales Integration Line"
         }
         field(130; "City Tax Amount"; Decimal)
         {
-            Caption = 'CityTax Amount';
+            Caption = 'City Tax Amount';
+        }
+        field(132; "School Tax Amount"; Decimal)
+        {
+            Caption = 'School Tax Amount';
+        }
+        field(134; "Other Tax Amount"; Decimal)
+        {
+            Caption = 'Other Tax Amount';
         }
         field(140; Taxable; Boolean)
         {

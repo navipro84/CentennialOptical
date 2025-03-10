@@ -44,7 +44,8 @@ codeunit 50201 "Import Sales Data"
                                                     ColumnTotalStateTaxAmount, ColumnTotalCountyTaxAmount, ColumnTotalCityTaxAmount,
                                                     ColumnTotalSchoolTaxAmount, ColumnTotalOtherAmount, ColumnQtyOrdered, ColumnQtyShipped,
                                                     ColumnLineAmount, ColumnUnitCost, ColumnLineTotalCost, ColumnLineStateTaxAmount,
-                                                    ColumnLineCountyTaxAmount, ColumnLineCityTaxAmount]) and (pCSVBuffer.Value <> '') then begin
+                                                    ColumnLineCountyTaxAmount, ColumnLineCityTaxAmount,
+                                                    ColumnLineSchoolTaxAmount, ColumnLineOtherTaxAmount]) and (pCSVBuffer.Value <> '') then begin
                         if not Evaluate(lDecimalVar, pCSVBuffer.Value) then begin
                             pCriticalErrorText.Add(StrSubstNo(FieldValueErr, pCSVBuffer."Line No.", pCSVBuffer."Field No.", 'Decimal', pCSVBuffer.Value));
                         end;
@@ -134,6 +135,8 @@ codeunit 50201 "Import Sales Data"
                     Evaluate(lSalesIntLine."State Tax Amount", pCSVBuffer.GetValue(i, ColumnLineStateTaxAmount));
                     Evaluate(lSalesIntLine."County Tax Amount", pCSVBuffer.GetValue(i, ColumnLineCountyTaxAmount));
                     Evaluate(lSalesIntLine."City Tax Amount", pCSVBuffer.GetValue(i, ColumnLineCityTaxAmount));
+                    Evaluate(lSalesIntLine."School Tax Amount", pCSVBuffer.GetValue(i, ColumnLineSchoolTaxAmount));
+                    Evaluate(lSalesIntLine."Other Tax Amount", pCSVBuffer.GetValue(i, ColumnLineOtherTaxAmount));
                     if pCSVBuffer.GetValue(i, ColumnTaxable) = 'Y' then
                         lSalesIntLine.Taxable := true;
                     lSalesIntLine.Insert;
@@ -143,6 +146,7 @@ codeunit 50201 "Import Sales Data"
         pFileLineCounter := i;
 
     end;
+
 
     [TryFunction]
     procedure CheckDate(pDateText: Text; var pDate: Date)
@@ -206,6 +210,8 @@ codeunit 50201 "Import Sales Data"
         ColumnLineStateTaxAmount := 58;
         ColumnLineCountyTaxAmount := 59;
         ColumnLineCityTaxAmount := 60;
+        ColumnLineSchoolTaxAmount := 61;
+        ColumnLineOtherTaxAmount := 62;
     end;
 
     var
@@ -257,4 +263,6 @@ codeunit 50201 "Import Sales Data"
         ColumnCustomerItemNo: Integer;
         ColumnUnitOfMeasure: Integer;
         ColumnInvoiceLineKey: Integer;
+        ColumnLineSchoolTaxAmount: Integer;
+        ColumnLineOtherTaxAmount: Integer;
 }

@@ -88,6 +88,14 @@ page 50163 "Sales Integration Line Subform"
                 {
                     ToolTip = 'Specifies the value of the CityTax Amount field.', Comment = '%';
                 }
+                field("School Tax Amount"; Rec."School Tax Amount")
+                {
+                    ToolTip = 'Specifies the value of the School Tax Amount field.', Comment = '%';
+                }
+                field("Other Tax Amount"; Rec."Other Tax Amount")
+                {
+                    ToolTip = 'Specifies the value of the Other Tax Amount field.', Comment = '%';
+                }
                 field("Sales Document Type"; Rec."Sales Document Type")
                 {
                     ToolTip = 'Specifies the value of the Sales Document Type field.', Comment = '%';

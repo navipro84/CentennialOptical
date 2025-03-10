@@ -29,7 +29,58 @@ table 50020 "Integration Setup"
         {
             Caption = 'Error Email Address';
         }
+        field(70; "Post Orders"; Boolean)
+        {
+            DataClassification = ToBeClassified;
+        }
+        field(80; "State Tax G/L Account No."; Code[20])
+        {
+            DataClassification = ToBeClassified;
+            TableRelation = "G/L Account";
+        }
+        field(90; "County Tax G/L Account No."; Code[20])
+        {
+            DataClassification = ToBeClassified;
+            TableRelation = "G/L Account";
+        }
+        field(100; "City Tax G/L Account No."; Code[20])
+        {
+            DataClassification = ToBeClassified;
+            TableRelation = "G/L Account";
+        }
+        field(110; "School Tax G/L Account No."; Code[20])
+        {
+            DataClassification = ToBeClassified;
+            TableRelation = "G/L Account";
+        }
+        field(120; "Other Tax G/L Account No."; Code[20])
+        {
+            DataClassification = ToBeClassified;
+            TableRelation = "G/L Account";
+        }
+        field(130; "Item Dimension Code"; Code[20])
+        {
+            DataClassification = ToBeClassified;
+            TableRelation = "Dimension";
+        }
+        field(140; "Income G/L Account No."; Code[20])
+        {
+            DataClassification = ToBeClassified;
+            TableRelation = "G/L Account";
+        }
+        field(150; "Inventory G/L Account No."; Code[20])
+        {
+            DataClassification = ToBeClassified;
+            TableRelation = "G/L Account";
+        }
+        field(160; "COGS G/L Account No."; Code[20])
+        {
+            DataClassification = ToBeClassified;
+            TableRelation = "G/L Account";
+        }
     }
+
+
     keys
     {
         key(PK; "Integration Type")
